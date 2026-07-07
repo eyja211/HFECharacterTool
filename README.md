@@ -1,52 +1,60 @@
-# HFE Character Tool
+# HFE 角色定制工具
 
-HFE Character Tool is a Windows GUI helper for creating and exporting custom
-Hero Fighter/HFE characters through a GUI. It focuses on target-aware character
-templates, texture selection, item-frame edits, validation, and export packaging.
+这是一个用于制作和导出 HFE / Hero Fighter 自定义角色的 Windows 图形化工具。工具的目标是让不熟悉 FFDec、HFWorkshop、SPT/LMI 和 SWF 补丁流程的玩家，也能通过界面完成角色模板选择、贴图配置、道具帧编辑、校验和导出。
 
-This repository is the public tool-only source package. It does not include
-generated game builds, local projects, external tool binaries, game binaries, or
-private workspace notes.
+本仓库只包含工具源码、测试和公开文档，不包含原游戏文件、第三方工具二进制、玩家本地项目或导出的游戏文件。
 
-## Features
+## 主要功能
 
-- Create and manage custom character projects.
-- Select a target HFE EXE/SWF before choosing role templates and item options.
-- Read available role templates, texture parts, actions, frames, and item data
-  from the selected target where possible.
-- Edit HP, MP, defense, names, texture choices, and item spawns on selected
-  action frames.
-- Validate project data before export.
-- Export modified EXE/SWF builds into an ignored local output folder.
-- Randomize character stats, textures, and frame item spawns for quick experiments.
+- 新建和管理自定义角色项目。
+- 先选择目标 HFE EXE/SWF，再按目标版本读取可用角色模板和道具目录。
+- 编辑角色 ID、名称、中文名、说明、HP、MP、防御等基础信息。
+- 按角色动作和动作内帧配置道具生成。
+- 为角色部位选择贴图来源。
+- 导出前执行校验，阻止明显不兼容的配置。
+- 支持在已经改过的目标版本上继续追加角色。
+- 支持随机生成角色属性、贴图组合和道具帧配置。
 
-## Repository Layout
+## 仓库结构
 
 ```text
-src/hfe_character_tool/   Python package and GUI source
-tests/                    pytest test suite
-docs/                     user-facing Markdown docs
-scripts/                  local build helper scripts
-vendor/README.md          expected external dependency layout
-底图.jpg                  GUI background image
-图标.jpg                  GUI icon source image
+src/hfe_character_tool/   工具源码
+tests/                    自动化测试
+docs/                     用户文档
+scripts/                  本地打包脚本
+vendor/README.md          外部依赖摆放说明
+pyproject.toml            Python 项目配置
 ```
 
-## External Dependencies
+## 不包含的内容
 
-The repository intentionally does not ship third-party binaries or game files.
-Prepare them locally before exporting real game builds:
+以下内容不会放进仓库，需要使用者在本地自行准备：
+
+- HFE / Hero Fighter 原版或改版游戏文件。
+- FFDec、HFWorkshop、SA.exe、playerglobal.swc 等第三方工具。
+- Java/JDK 运行环境。
+- `projects/` 下的本地角色项目。
+- `output/` 下的导出 EXE/SWF、缓存和日志。
+
+## 外部依赖目录
+
+真实导出游戏前，请在仓库根目录按下面结构准备依赖：
 
 ```text
-vendor/FFDec/ffdec.jar
-vendor/HFWorkshop/HFWorkshop.exe
-vendor/projector/SA.exe
-vendor/playerGlobal/playerglobal.swc
-vendor/original_game/HFE v1.0.2.exe
+vendor/
+  FFDec/
+    ffdec.jar
+  HFWorkshop/
+    HFWorkshop.exe
+  projector/
+    SA.exe
+  playerGlobal/
+    playerglobal.swc
+  original_game/
+    HFE v1.0.2.exe
 ```
 
-Java/JDK is also required for FFDec patching. You can either install Java on the
-system PATH, or place a JDK under one of these local folders:
+Java/JDK 可以安装到系统 PATH，也可以放在仓库附近的这些目录之一：
 
 ```text
 runtime/jdk/
@@ -55,9 +63,11 @@ jdk/
 jdk-*/
 ```
 
-See `docs/dependencies.md` for details.
+更详细的说明见 `docs/dependencies.md`。
 
-## Development Setup
+## 开发环境
+
+建议使用 Python 3.8 或更新版本。
 
 ```powershell
 python -m venv .venv
@@ -66,7 +76,7 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Run checks:
+运行测试和检查：
 
 ```powershell
 python -m pytest -q
@@ -74,7 +84,7 @@ python -m mypy src tests
 python -m ruff check src tests
 ```
 
-Run from source:
+从源码启动：
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -82,31 +92,29 @@ $env:PYTHONUTF8 = "1"
 python -m hfe_character_tool
 ```
 
-## Windows Packaging
+## 本地打包 Windows EXE
 
-Install packaging dependencies:
+先安装打包依赖：
 
 ```powershell
 python -m pip install -e ".[package]"
 ```
 
-Build a local one-file Windows GUI executable:
+执行打包脚本：
 
 ```powershell
 .\scripts\build_windows.ps1
 ```
 
-The build output is written to `output/tool_dist/`, which is ignored by Git.
+打包结果会写入 `output/tool_dist/`。`output/` 默认被 Git 忽略。
 
-## Publishing Notes
+## 发布前注意
 
-Before creating a GitHub release:
+- 不要提交 `vendor/`、`runtime/`、`projects/`、`output/`。
+- 不要提交导出的游戏 EXE/SWF。
+- 不要提交第三方工具、原游戏文件或个人本地配置。
+- 发布前至少运行 `pytest`、`mypy` 和 `ruff`。
 
-- Keep `vendor/`, `runtime/`, `projects/`, and `output/` out of Git.
-- Do not publish locally exported game EXEs/SWFs.
-- Do not publish personal workspace notes or generated test projects.
-- Run the full test, type-check, lint, and packaged-GUI smoke checks.
+## 许可
 
-## License
-
-Choose and add a license before making this repository public.
+公开发布前请根据实际情况补充许可证文件。

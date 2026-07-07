@@ -17,7 +17,6 @@ dev = [
 ]
 package = [
   "pyinstaller>=6,<7",
-  "pillow>=10",
 ]
 
 [tool.setuptools.packages.find]

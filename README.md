@@ -15,6 +15,20 @@
 - 支持在已经改过的目标版本上继续追加角色。
 - 支持随机生成角色属性、贴图组合和道具帧配置。
 
+## 界面预览
+
+### 编辑角色
+
+![编辑角色页面](docs/images/edit-character.png)
+
+### 贴图与技能
+
+![贴图与技能页面](docs/images/items-and-textures.png)
+
+### 校验导出
+
+![校验导出页面](docs/images/validation-export.png)
+
 ## 仓库结构
 
 ```text

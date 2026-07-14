@@ -1,5 +1,7 @@
 # HFE 角色定制工具
 
+[中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
+
 这是一个用于制作和导出 HFE / Hero Fighter 自定义角色的 Windows 图形化工具。工具的目标是让不熟悉 FFDec、HFWorkshop、SPT/LMI 和 SWF 补丁流程的玩家，也能通过界面完成角色模板选择、贴图配置、道具帧编辑、校验和导出。
 
 本仓库只包含工具源码、测试和公开文档，不包含原游戏文件、第三方工具二进制、玩家本地项目或导出的游戏文件。

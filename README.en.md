@@ -25,6 +25,8 @@ local player projects, or exported game files.
 - Add characters to targets that have already been modified.
 - Generate randomized character attributes, texture combinations, and item-frame
   configurations.
+- Add afterimages that replay a character's actions after a set number of frames,
+  with separate switches for whether they deal damage and whether they re-fire items.
 
 ## Interface Preview
 

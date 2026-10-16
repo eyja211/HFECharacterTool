@@ -64,6 +64,7 @@ def test_project_json_uses_expected_top_level_sections(tmp_path: Path) -> None:
         "item_frame_edits",
         "textures",
         "target_game",
+        "afterimage",
         "assets",
         "exports",
     }
@@ -75,6 +76,7 @@ def test_project_json_uses_expected_top_level_sections(tmp_path: Path) -> None:
     assert {"hp", "mp", "defense"} <= set(raw["stats"])
     assert raw["item_frame_edits"] == []
     assert raw["target_game"]["source_kind"] == "exe"
+    assert raw["afterimage"] == {"delays": [], "damage": True, "items": True}
 
 
 def test_create_project_can_store_selected_target_game(tmp_path: Path) -> None:

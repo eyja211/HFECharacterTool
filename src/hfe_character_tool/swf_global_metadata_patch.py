@@ -18,6 +18,21 @@ class GlobalMetadataPatchResult:
     run_result: ToolResult
 
 
+@dataclass(frozen=True)
+class GlobalMetadataEntry:
+    character_id: str
+    display_name: str
+    display_name_zh: str
+    hp: int
+    mp: int
+    stamina: int
+    character_index: int
+    description: str
+    source_character_id: str
+    fallback_character_index: int = -1
+    add_to_char_list: bool = True
+
+
 def patch_global_character_metadata(
     input_swf: Path,
     output_swf: Path,
@@ -98,6 +113,86 @@ def patch_global_character_metadata(
     )
 
 
+def patch_global_character_metadata_entries(
+    input_swf: Path,
+    output_swf: Path,
+    tools: ToolConfig,
+    cwd: Path,
+    entries: tuple[GlobalMetadataEntry, ...],
+    output_exe: Path | None = None,
+) -> GlobalMetadataPatchResult:
+    if not entries:
+        raise ValueError("At least one global metadata entry is required.")
+    source_path = write_global_metadata_patch_source(output_swf.parent)
+    class_dir = output_swf.parent / "global_metadata_patch_classes"
+    class_dir.mkdir(exist_ok=True)
+    compile_result = run_tool(
+        (
+            "javac",
+            "-encoding",
+            "UTF-8",
+            "-cp",
+            str(tools.ffdec),
+            "-d",
+            str(class_dir),
+            str(source_path),
+        ),
+        cwd,
+    )
+    if not compile_result.success:
+        return GlobalMetadataPatchResult(
+            source_path,
+            class_dir,
+            output_swf,
+            None,
+            compile_result,
+            ToolResult(False, -1, "", "global metadata patch compile failed"),
+        )
+    entry_args: list[str] = []
+    for entry in entries:
+        entry_args.extend(
+            (
+                entry.character_id,
+                entry.display_name,
+                entry.display_name_zh,
+                str(entry.hp),
+                str(entry.mp),
+                str(entry.stamina),
+                str(entry.character_index),
+                entry.source_character_id,
+                entry.description,
+                str(entry.fallback_character_index),
+                str(entry.add_to_char_list).lower(),
+            )
+        )
+    classpath = f"{class_dir};{tools.ffdec}"
+    run_result = run_tool(
+        (
+            "java",
+            "-cp",
+            classpath,
+            GLOBAL_METADATA_PATCH_CLASS_NAME,
+            str(input_swf),
+            str(output_swf),
+            "--batch",
+            *entry_args,
+        ),
+        cwd,
+    )
+    actual_exe = None
+    if run_result.success and output_exe is not None:
+        wrap_with_projector(tools.projector, output_swf, output_exe)
+        actual_exe = output_exe
+    return GlobalMetadataPatchResult(
+        source_path,
+        class_dir,
+        output_swf,
+        actual_exe,
+        compile_result,
+        run_result,
+    )
+
+
 def write_global_metadata_patch_source(output_dir: Path) -> Path:
     output_dir.mkdir(exist_ok=True)
     path = output_dir / f"{GLOBAL_METADATA_PATCH_CLASS_NAME}.java"
@@ -127,6 +222,66 @@ import java.util.List;
 
 public class HfeGlobalMetadataPatch {
     public static void main(String[] args) throws Exception {
+        if (args.length >= 3 && "--batch".equals(args[2])) {
+            if (((args.length - 3) % 11) != 0) {
+                throw new IllegalArgumentException(
+                        "Batch usage: HfeGlobalMetadataPatch <in.swf> <out.swf> --batch "
+                                + "(<id> <name> <nameB5> <hp> <mp> <stamina> <index> "
+                                + "<sourceCharacterId> <description> <fallbackIndex> "
+                                + "<addToCharList>)+"
+                );
+            }
+            SWF swf = new SWF(new BufferedInputStream(new FileInputStream(args[0])), false);
+            PatchTarget target = findGlobalCinit(swf);
+            if (target == null) {
+                throw new IllegalStateException("Data.Global static initializer not found");
+            }
+            int entryCount = (args.length - 3) / 11;
+            for (int i = 0; i < entryCount; i++) {
+                int base = 3 + (i * 11);
+                Entry entry = new Entry(
+                        args[base],
+                        args[base + 1],
+                        args[base + 2],
+                        Integer.parseInt(args[base + 3]),
+                        Integer.parseInt(args[base + 4]),
+                        Integer.parseInt(args[base + 5]),
+                        Integer.parseInt(args[base + 6]),
+                        args[base + 7],
+                        args[base + 8],
+                        Integer.parseInt(args[base + 9]),
+                        Boolean.parseBoolean(args[base + 10])
+                );
+                int characterIndex = resolveCharacterIndex(
+                        target,
+                        entry.characterIndex,
+                        entry.sourceCharacterId,
+                        entry.fallbackCharacterIndex
+                );
+                injectMetadata(
+                        target,
+                        entry.characterId,
+                        entry.displayName,
+                        entry.displayNameB5,
+                        entry.description,
+                        entry.hp,
+                        entry.mp,
+                        entry.stamina,
+                        characterIndex,
+                        entry.sourceCharacterId,
+                        entry.addToCharList
+                );
+            }
+            swf.setModified(true);
+            try (OutputStream os = new FileOutputStream(args[1])) {
+                swf.saveTo(os);
+            }
+            System.out.println(
+                    "{\"success\":true,\"patched\":\"global_character_metadata_batch\","
+                            + "\"entry_count\":" + entryCount + "}"
+            );
+            return;
+        }
         if (args.length < 9 || args.length > 13) {
             throw new IllegalArgumentException(
                 "Usage: HfeGlobalMetadataPatch <in.swf> <out.swf> <id> <name> <nameB5> "
@@ -159,30 +314,19 @@ public class HfeGlobalMetadataPatch {
         if (target == null) {
             throw new IllegalStateException("Data.Global static initializer not found");
         }
-        boolean sourcePowFound = false;
+        boolean sourcePowFound = !sourceCharacterId.isEmpty()
+                && findSourcePowRoleIdIndex(target, sourceCharacterId) >= 0;
         boolean usedFallbackIndex = false;
-        if (characterIndex == -2) {
-            characterIndex = findNextPowIndex(target);
-        }
-        if (characterIndex < 0 && !sourceCharacterId.isEmpty()) {
-            int sourceIndex = findSourcePowIndex(target, sourceCharacterId);
-            if (sourceIndex >= 0) {
-                characterIndex = sourceIndex;
-                sourcePowFound = true;
-            }
-        }
-        if (characterIndex < 0 && fallbackCharacterIndex >= 0) {
-            characterIndex = fallbackCharacterIndex;
-            usedFallbackIndex = true;
-        }
-        if (characterIndex < 0) {
-            throw new IllegalStateException(
-                    "Source character pow.i not found: " + sourceCharacterId
-            );
-        }
+        int originalCharacterIndex = characterIndex;
+        characterIndex = resolveCharacterIndex(
+                target, characterIndex, sourceCharacterId, fallbackCharacterIndex
+        );
+        usedFallbackIndex = originalCharacterIndex < 0
+                && fallbackCharacterIndex >= 0
+                && characterIndex == fallbackCharacterIndex;
         injectMetadata(
                 target, characterId, displayName, displayNameB5, description,
-                hp, mp, stamina, characterIndex, addToCharList
+                hp, mp, stamina, characterIndex, sourceCharacterId, addToCharList
         );
         swf.setModified(true);
         try (OutputStream os = new FileOutputStream(args[1])) {
@@ -198,6 +342,32 @@ public class HfeGlobalMetadataPatch {
                         + "\"add_to_char_list\":" + addToCharList + ","
                         + "\"hp\":" + hp + ",\"mp\":" + mp + ",\"stamina\":" + stamina + "}"
         );
+    }
+
+    private static int resolveCharacterIndex(
+            PatchTarget target,
+            int characterIndex,
+            String sourceCharacterId,
+            int fallbackCharacterIndex
+    ) {
+        if (characterIndex == -2) {
+            characterIndex = findNextPowIndex(target);
+        }
+        if (characterIndex < 0 && !sourceCharacterId.isEmpty()) {
+            int sourceIndex = findSourcePowIndex(target, sourceCharacterId);
+            if (sourceIndex >= 0) {
+                characterIndex = sourceIndex;
+            }
+        }
+        if (characterIndex < 0 && fallbackCharacterIndex >= 0) {
+            characterIndex = fallbackCharacterIndex;
+        }
+        if (characterIndex < 0) {
+            throw new IllegalStateException(
+                    "Source character pow.i not found: " + sourceCharacterId
+            );
+        }
+        return characterIndex;
     }
 
     private static PatchTarget findGlobalCinit(SWF swf) {
@@ -217,6 +387,20 @@ public class HfeGlobalMetadataPatch {
     }
 
     private static int findSourcePowIndex(PatchTarget target, String sourceCharacterId) {
+        AVM2Code code = target.body.getCode();
+        int sourceIdIndex = findSourcePowRoleIdIndex(target, sourceCharacterId);
+        if (sourceIdIndex < 0) {
+            return -1;
+        }
+        int objectEnd = findPowObjectEnd(code, sourceIdIndex + 1);
+        int value = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "i");
+        if (value >= 0) {
+            return value;
+        }
+        return -1;
+    }
+
+    private static int findSourcePowRoleIdIndex(PatchTarget target, String sourceCharacterId) {
         Const c = new Const(target.abc);
         AVM2Code code = target.body.getCode();
         for (int i = 0; i < code.code.size(); i++) {
@@ -227,12 +411,8 @@ public class HfeGlobalMetadataPatch {
                 continue;
             }
             int objectEnd = findPowObjectEnd(code, i + 1);
-            if (!hasPowObjectFields(target.abc, code, i + 1, objectEnd)) {
-                continue;
-            }
-            int value = readObjectPairInt(target.abc, code, i + 1, objectEnd, "i");
-            if (value >= 0) {
-                return value;
+            if (hasPowObjectFields(target.abc, code, i + 1, objectEnd)) {
+                return i;
             }
         }
         return -1;
@@ -323,6 +503,25 @@ public class HfeGlobalMetadataPatch {
         return -1;
     }
 
+    private static String readObjectPairString(
+            ABC abc,
+            AVM2Code code,
+            int start,
+            int stopExclusive,
+            String key
+    ) {
+        int stop = Math.min(stopExclusive, code.code.size());
+        for (int i = start; i < stop; i++) {
+            if (!isPushString(abc, code.code.get(i), key)) {
+                continue;
+            }
+            if (i + 1 < stop) {
+                return pushedString(abc, code.code.get(i + 1));
+            }
+        }
+        return null;
+    }
+
     private static boolean isPushString(ABC abc, AVM2Instruction ins, String value) {
         return "pushstring".equals(ins.definition.instructionName)
                 && ins.operands != null
@@ -376,7 +575,9 @@ public class HfeGlobalMetadataPatch {
                 || "lv_".equals(value)
                 || "exp_".equals(value)
                 || "c".equals(value)
-                || "fake_hp".equals(value);
+                || "fake_hp".equals(value)
+                || "en".equals(value)
+                || "b5".equals(value);
     }
 
     private static boolean isGetLex(AVM2Instruction ins, int qname) {
@@ -426,6 +627,7 @@ public class HfeGlobalMetadataPatch {
             int mp,
             int stamina,
             int characterIndex,
+            String sourceCharacterId,
             boolean addToCharList
     ) {
         Const c = new Const(target.abc);
@@ -439,11 +641,136 @@ public class HfeGlobalMetadataPatch {
         if (addToCharList) {
             addCharListOrderPush(injected, c, characterId);
         }
-        addPowEntry(injected, c, characterId, hp, mp, stamina, characterIndex);
+        List<AVM2Instruction> sourcePowEntry = addPowEntryFromSource(
+                target, c, characterId, sourceCharacterId, characterIndex
+        );
+        if (sourcePowEntry == null) {
+            addPowEntry(injected, c, characterId, hp, mp, stamina, characterIndex);
+        } else {
+            injected.addAll(sourcePowEntry);
+        }
         addLangWordsEntry(injected, c, characterId, displayName, displayNameB5);
         addLangWordsEntry(injected, c, characterId + "_desc", description, description);
         insertAll(code, body, insertAt, injected);
         finish(target, code);
+    }
+
+    private static List<AVM2Instruction> addPowEntryFromSource(
+            PatchTarget target,
+            Const c,
+            String characterId,
+            String sourceCharacterId,
+            int characterIndex
+    ) {
+        return cloneSourcePowEntry(target, c, characterId, sourceCharacterId, characterIndex);
+    }
+
+    private static List<AVM2Instruction> cloneSourcePowEntry(
+            PatchTarget target,
+            Const c,
+            String characterId,
+            String sourceCharacterId,
+            int characterIndex
+    ) {
+        if (sourceCharacterId == null || sourceCharacterId.isEmpty()) {
+            return null;
+        }
+        AVM2Code code = target.body.getCode();
+        int sourceIdIndex = findSourcePowRoleIdIndex(target, sourceCharacterId);
+        if (sourceIdIndex < 0) {
+            return null;
+        }
+        int objectEnd = findPowObjectEnd(code, sourceIdIndex + 1);
+        if (objectEnd > code.code.size()) {
+            return null;
+        }
+        int hp0 = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "hp0");
+        int mp0 = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "mp0");
+        int str0 = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "str0");
+        int lv = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "lv");
+        int hp = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "hp");
+        int mp = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "mp");
+        int str = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "str");
+        int exp = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "exp");
+        String state = readObjectPairString(
+                target.abc, code, sourceIdIndex + 1, objectEnd, "state"
+        );
+        int hp_ = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "hp_");
+        int mp_ = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "mp_");
+        int str_ = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "str_");
+        int lv_ = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "lv_");
+        int exp_ = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "exp_");
+        int cValue = readObjectPairInt(target.abc, code, sourceIdIndex + 1, objectEnd, "c");
+        int fakeHp = readObjectPairInt(
+                target.abc, code, sourceIdIndex + 1, objectEnd, "fake_hp"
+        );
+        if (hp0 < 0 || mp0 < 0 || str0 < 0 || lv < 0 || hp < 0 || mp < 0 || str < 0
+                || exp < 0 || state == null || hp_ < 0 || mp_ < 0 || str_ < 0
+                || lv_ < 0 || exp_ < 0 || cValue < 0 || fakeHp < 0) {
+            return null;
+        }
+        List<AVM2Instruction> out = new ArrayList<>();
+        out.add(ins(AVM2Instructions.GetLex, c.qPow));
+        out.add(ins(AVM2Instructions.PushString, c.string(characterId)));
+        addPair(out, c, "i", characterIndex);
+        addPair(out, c, "hp0", hp0);
+        addPair(out, c, "mp0", mp0);
+        addPair(out, c, "str0", str0);
+        addPair(out, c, "lv", lv);
+        addPair(out, c, "hp", hp);
+        addPair(out, c, "mp", mp);
+        addPair(out, c, "str", str);
+        addPair(out, c, "exp", exp);
+        addPair(out, c, "state", state);
+        addPair(out, c, "hp_", hp_);
+        addPair(out, c, "mp_", mp_);
+        addPair(out, c, "str_", str_);
+        addPair(out, c, "lv_", lv_);
+        addPair(out, c, "exp_", exp_);
+        addPair(out, c, "c", cValue);
+        addPair(out, c, "fake_hp", fakeHp);
+        out.add(ins(AVM2Instructions.NewObject, 17));
+        out.add(ins(AVM2Instructions.SetProperty, c.mAny));
+        replaceClonedPowIndex(target.abc, out, characterIndex);
+        return out;
+    }
+
+    private static int findPowAccessIndexBefore(AVM2Code code, int beforeIndex, int qname) {
+        int start = Math.max(0, beforeIndex - 8);
+        for (int i = beforeIndex - 1; i >= start; i--) {
+            AVM2Instruction ins = code.code.get(i);
+            if (isPowAccess(ins, qname)) {
+                return i;
+            }
+            String name = ins.definition.instructionName;
+            if ("newarray".equals(name) || "newobject".equals(name) || "setproperty".equals(name)) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    private static void replaceClonedPowIndex(
+            ABC abc,
+            List<AVM2Instruction> cloned,
+            int characterIndex
+    ) {
+        for (int i = 0; i < cloned.size() - 1; i++) {
+            if (isPushString(abc, cloned.get(i), "i")) {
+                cloned.set(i + 1, pushInt(characterIndex));
+                return;
+            }
+        }
+        throw new IllegalStateException("Cloned source pow object has no i field");
+    }
+
+    private static AVM2Instruction cloneInstruction(AVM2Instruction source) {
+        AVM2Instruction cloned = source.clone();
+        cloned.setAddress(0);
+        if (cloned.operands != null) {
+            cloned.operands = cloned.operands.clone();
+        }
+        return cloned;
     }
 
     private static void addCharListOrderPush(
@@ -617,6 +944,46 @@ public class HfeGlobalMetadataPatch {
             this.tag = tag;
             this.abc = abc;
             this.body = body;
+        }
+    }
+
+    private static class Entry {
+        final String characterId;
+        final String displayName;
+        final String displayNameB5;
+        final int hp;
+        final int mp;
+        final int stamina;
+        final int characterIndex;
+        final String sourceCharacterId;
+        final String description;
+        final int fallbackCharacterIndex;
+        final boolean addToCharList;
+
+        Entry(
+                String characterId,
+                String displayName,
+                String displayNameB5,
+                int hp,
+                int mp,
+                int stamina,
+                int characterIndex,
+                String sourceCharacterId,
+                String description,
+                int fallbackCharacterIndex,
+                boolean addToCharList
+        ) {
+            this.characterId = characterId;
+            this.displayName = displayName;
+            this.displayNameB5 = displayNameB5;
+            this.hp = hp;
+            this.mp = mp;
+            this.stamina = stamina;
+            this.characterIndex = characterIndex;
+            this.sourceCharacterId = sourceCharacterId;
+            this.description = description;
+            this.fallbackCharacterIndex = fallbackCharacterIndex;
+            this.addToCharList = addToCharList;
         }
     }
 }

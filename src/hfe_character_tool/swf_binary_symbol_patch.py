@@ -41,6 +41,7 @@ def clone_binary_symbols(
     texture_replacements: Mapping[str, str] | None = None,
     workspace: Path | None = None,
     source_character_id: str = "lucas",
+    source_lmi_path_id: str | None = None,
     spt_actions: tuple[SptActionInfo, ...] | None = None,
     output_exe: Path | None = None,
 ) -> BinarySymbolPatchResult:
@@ -91,6 +92,7 @@ def clone_binary_symbols(
             _encode_frame_item_edits(item_frame_edits, workspace or cwd, spt_actions),
             _encode_texture_replacements(texture_replacements or {}),
             source_character_id,
+            source_lmi_path_id or source_character_id,
         )
     run_result = run_tool(command, cwd)
     actual_exe = None
@@ -182,12 +184,13 @@ import java.util.zip.InflaterInputStream;
 
 public class HfeBinarySymbolClonePatch {
     public static void main(String[] args) throws Exception {
-        if (args.length != 6 && args.length != 11 && args.length != 12) {
+        if (args.length != 6 && args.length != 11 && args.length != 12 && args.length != 13) {
             throw new IllegalArgumentException(
                     "Usage: HfeBinarySymbolClonePatch <in.swf> <out.swf> "
                             + "<sourceSptClass> <sourceLmiClass> <targetSptClass> "
                             + "<targetLmiClass> [targetCharacterId resourceId defenseBrk0 "
-                            + "frameItemSpec textureReplacements sourceCharacterId]"
+                            + "frameItemSpec textureReplacements sourceCharacterId "
+                            + "sourceLmiPathId]"
             );
         }
         SWF swf = new SWF(new BufferedInputStream(new FileInputStream(args[0])), false);
@@ -202,7 +205,8 @@ public class HfeBinarySymbolClonePatch {
         int defenseBrk0 = args.length >= 11 ? Integer.parseInt(args[8]) : 0;
         String frameItemSpec = args.length >= 11 ? args[9] : "";
         String textureSpec = args.length >= 11 ? args[10] : "";
-        String sourceCharacterId = args.length == 12 ? args[11] : "lucas";
+        String sourceCharacterId = args.length >= 12 ? args[11] : "lucas";
+        String sourceLmiPathId = args.length == 13 ? args[12] : sourceCharacterId;
         byte[] sourceLmiPayload = inflateCharacterPayload(sourceLmi.getDataBytes().getRangeData());
         String[] sourceLmiLimbNames = detectLimbNames(sourceLmiPayload);
         String[] replacementLimbNames = selectLimbNamesForReplacement(
@@ -220,14 +224,16 @@ public class HfeBinarySymbolClonePatch {
         PatchStats lmiPatchStats = new PatchStats();
         DefineBinaryDataTag clonedSpt = cloneBinaryData(
                 swf, sourceSpt, args[4], targetCharacterId, resourceId, targetLimbPrefix,
-                sourceCharacterId, true, replacementLimbNames, defenseBrk0, frameItemSpec,
-                textureSpec, fallbackPtTemplate, externalLmiLimbNames, sptPatchStats
+                sourceCharacterId, sourceLmiPathId, true, replacementLimbNames, defenseBrk0,
+                frameItemSpec, textureSpec, fallbackPtTemplate, externalLmiLimbNames,
+                sptPatchStats
         );
         swf.addTag(symbolIndex, clonedSpt);
         DefineBinaryDataTag clonedLmi = cloneBinaryData(
                 swf, sourceLmi, args[5], targetCharacterId, resourceId, targetLimbPrefix,
-                sourceCharacterId, false, replacementLimbNames, defenseBrk0, frameItemSpec,
-                textureSpec, fallbackPtTemplate, externalLmiLimbNames, lmiPatchStats
+                sourceCharacterId, sourceLmiPathId, false, replacementLimbNames, defenseBrk0,
+                frameItemSpec, textureSpec, fallbackPtTemplate, externalLmiLimbNames,
+                lmiPatchStats
         );
         swf.addTag(symbolIndex + 1, clonedLmi);
         symbolTag.tags.add(clonedSpt.getCharacterId());
@@ -253,6 +259,7 @@ public class HfeBinarySymbolClonePatch {
                                 ? "null"
                                 : "\"" + jsonEscape(targetCharacterId) + "\"")
                         + ",\"source_character_id\":\"" + jsonEscape(sourceCharacterId) + "\""
+                        + ",\"source_lmi_path_id\":\"" + jsonEscape(sourceLmiPathId) + "\""
                         + ",\"spt_id_replacements\":"
                         + sptPatchStats.sptIdReplacements
                         + ",\"spt_limb_name_replacements\":"
@@ -337,6 +344,7 @@ public class HfeBinarySymbolClonePatch {
             String resourceId,
             String targetLimbPrefix,
             String sourceCharacterId,
+            String sourceLmiPathId,
             boolean patchSptId,
             String[] replacementLimbNames,
             int defenseBrk0,
@@ -353,8 +361,8 @@ public class HfeBinarySymbolClonePatch {
         if (targetCharacterId != null) {
             data = patchCharacterPayload(
                     data, targetCharacterId, resourceId, targetLimbPrefix, sourceCharacterId,
-                    patchSptId, replacementLimbNames, defenseBrk0, frameItemSpec, textureSpec,
-                    fallbackPtTemplate, externalLmiLimbNames, stats
+                    sourceLmiPathId, patchSptId, replacementLimbNames, defenseBrk0,
+                    frameItemSpec, textureSpec, fallbackPtTemplate, externalLmiLimbNames, stats
             );
         }
         cloned.setDataBytes(new ByteArrayRange(data));
@@ -369,6 +377,7 @@ public class HfeBinarySymbolClonePatch {
             String resourceId,
             String targetLimbPrefix,
             String sourceCharacterId,
+            String sourceLmiPathId,
             boolean patchSptId,
             String[] replacementLimbNames,
             int defenseBrk0,
@@ -378,7 +387,6 @@ public class HfeBinarySymbolClonePatch {
             String[] externalLmiLimbNames,
             PatchStats stats
     ) {
-        validateResourceId(resourceId, sourceCharacterId);
         byte[] inflated = inflateCharacterPayload(source);
         byte[] patched = inflated;
         if (patchSptId) {
@@ -388,7 +396,7 @@ public class HfeBinarySymbolClonePatch {
             spt = replaceFirstSptId(spt, targetCharacterId, stats);
             spt = replaceExactUtfStrings(
                     spt,
-                    "lmi_data/" + sourceCharacterId + ".lmi",
+                    "lmi_data/" + sourceLmiPathId + ".lmi",
                     "lmi_data/" + resourceId + ".lmi",
                     stats,
                     ReplacementKind.LMI_PATH,
@@ -476,17 +484,6 @@ public class HfeBinarySymbolClonePatch {
         out.write((bytes.length >> 8) & 0xff);
         out.write(bytes.length & 0xff);
         out.write(bytes, 0, bytes.length);
-    }
-
-    private static void validateResourceId(String resourceId, String sourceCharacterId) {
-        int targetLength = resourceId.getBytes(StandardCharsets.UTF_8).length;
-        int templateLength = sourceCharacterId.getBytes(StandardCharsets.UTF_8).length;
-        if (targetLength != templateLength) {
-            throw new IllegalArgumentException(
-                    "Binary SPT/LMI resource namespace currently requires an id with the "
-                            + "same byte length as the selected source role."
-            );
-        }
     }
 
     private static byte[] replaceFirstSptId(
@@ -914,10 +911,20 @@ public class HfeBinarySymbolClonePatch {
         for (int i = 0; i < externalLmiLimbNames.length; i++) {
             String sourceLimbName = externalLmiLimbNames[i];
             String alias = externalLmiLimbAlias(resourceId, sourceLimbName, i);
-            if (limbNameSeparator(sourceLimbName) <= 0) {
+            if (!sptPayload) {
                 patched = replaceNamedUtfStringValue(
                         patched,
-                        sptPayload ? "limbName" : "name",
+                        "name",
+                        sourceLimbName,
+                        alias,
+                        stats,
+                        ReplacementKind.EXTERNAL_LMI_ALIAS,
+                        false
+                );
+            } else if (limbNameSeparator(sourceLimbName) <= 0) {
+                patched = replaceNamedUtfStringValue(
+                        patched,
+                        "limbName",
                         sourceLimbName,
                         alias,
                         stats,
@@ -962,10 +969,41 @@ public class HfeBinarySymbolClonePatch {
         String alias = compactAliasPrefix(resourceId, sourcePrefix, index, prefixByteLength)
                 + "_"
                 + suffix;
+        if (alias.equals(sourceLimbName) || alias.equalsIgnoreCase(sourceLimbName)) {
+            alias = alternateExternalLmiLimbAlias(
+                    resourceId,
+                    sourcePrefix,
+                    suffix,
+                    index,
+                    prefixByteLength,
+                    sourceLimbName
+            );
+        }
         if (alias.getBytes(StandardCharsets.UTF_8).length != sourceByteLength) {
             throw new IllegalStateException("External LMI alias length mismatch");
         }
         return alias;
+    }
+
+    private static String alternateExternalLmiLimbAlias(
+            String resourceId,
+            String sourcePrefix,
+            String suffix,
+            int index,
+            int prefixByteLength,
+            String sourceLimbName
+    ) {
+        int sourceByteLength = sourceLimbName.getBytes(StandardCharsets.UTF_8).length;
+        for (int offset = 1; offset <= 256; offset++) {
+            String candidate = compactAliasPrefix(
+                    resourceId, sourcePrefix, index + offset, prefixByteLength
+            ) + "_" + suffix;
+            if (!candidate.equals(sourceLimbName)
+                    && candidate.getBytes(StandardCharsets.UTF_8).length == sourceByteLength) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("Could not derive non-identical external LMI alias");
     }
 
     private static String compactBareLimbAlias(

@@ -18,6 +18,14 @@ class RegistryEntryPatchResult:
     run_result: ToolResult
 
 
+@dataclass(frozen=True)
+class RegistryEntrySpec:
+    character_id: str
+    spt_class: str
+    lmi_class: str | None
+    lmi_resource_id: str | None = None
+
+
 def patch_single_registry_entry(
     input_swf: Path,
     output_swf: Path,
@@ -84,6 +92,78 @@ def patch_single_registry_entry(
     )
 
 
+def patch_registry_entries(
+    input_swf: Path,
+    output_swf: Path,
+    tools: ToolConfig,
+    cwd: Path,
+    entries: tuple[RegistryEntrySpec, ...],
+    output_exe: Path | None = None,
+) -> RegistryEntryPatchResult:
+    if not entries:
+        raise ValueError("At least one registry entry is required.")
+    source_path = write_registry_entry_patch_source(output_swf.parent)
+    class_dir = output_swf.parent / "registry_entry_patch_classes"
+    class_dir.mkdir(exist_ok=True)
+    compile_result = run_tool(
+        (
+            "javac",
+            "-encoding",
+            "UTF-8",
+            "-cp",
+            str(tools.ffdec),
+            "-d",
+            str(class_dir),
+            str(source_path),
+        ),
+        cwd,
+    )
+    if not compile_result.success:
+        return RegistryEntryPatchResult(
+            source_path,
+            class_dir,
+            output_swf,
+            None,
+            compile_result,
+            ToolResult(False, -1, "", "registry entry patch compile failed"),
+        )
+    classpath = f"{class_dir};{tools.ffdec}"
+    entry_args: list[str] = []
+    for entry in entries:
+        entry_args.extend(
+            (
+                entry.character_id,
+                entry.spt_class,
+                entry.lmi_class or "",
+                entry.lmi_resource_id or entry.character_id,
+            )
+        )
+    run_result = run_tool(
+        (
+            "java",
+            "-cp",
+            classpath,
+            REGISTRY_ENTRY_PATCH_CLASS_NAME,
+            str(input_swf),
+            str(output_swf),
+            *entry_args,
+        ),
+        cwd,
+    )
+    actual_exe = None
+    if run_result.success and output_exe is not None:
+        wrap_with_projector(tools.projector, output_swf, output_exe)
+        actual_exe = output_exe
+    return RegistryEntryPatchResult(
+        source_path,
+        class_dir,
+        output_swf,
+        actual_exe,
+        compile_result,
+        run_result,
+    )
+
+
 def write_registry_entry_patch_source(output_dir: Path) -> Path:
     output_dir.mkdir(exist_ok=True)
     path = output_dir / f"{REGISTRY_ENTRY_PATCH_CLASS_NAME}.java"
@@ -112,30 +192,60 @@ import java.io.OutputStream;
 
 public class HfeRegistryEntryPatch {
     public static void main(String[] args) throws Exception {
-        if (args.length != 4 && args.length != 5 && args.length != 6) {
+        boolean singleMode = args.length == 4 || args.length == 5 || args.length == 6;
+        boolean batchMode = args.length >= 10 && ((args.length - 2) % 4) == 0;
+        if (!singleMode && !batchMode) {
             throw new IllegalArgumentException(
                     "Usage: HfeRegistryEntryPatch <in.swf> <out.swf> <id> "
-                            + "<sptClass> [lmiClass] [lmiResourceId]"
+                            + "<sptClass> [lmiClass] [lmiResourceId] OR "
+                            + "<in.swf> <out.swf> (<id> <sptClass> <lmiClass> "
+                            + "<lmiResourceId>)+"
             );
         }
-        String lmiClass = args.length >= 5 ? args[4] : null;
-        String lmiResourceId = args.length == 6 ? args[5] : args[2];
+        Entry[] entries;
+        if (singleMode) {
+            String lmiClass = args.length >= 5 ? args[4] : null;
+            String lmiResourceId = args.length == 6 ? args[5] : args[2];
+            entries = new Entry[]{new Entry(args[2], args[3], lmiClass, lmiResourceId)};
+        } else {
+            int count = (args.length - 2) / 4;
+            entries = new Entry[count];
+            for (int i = 0; i < count; i++) {
+                int base = 2 + (i * 4);
+                String lmiClass = args[base + 2].isEmpty() ? null : args[base + 2];
+                String lmiResourceId = args[base + 3].isEmpty() ? args[base] : args[base + 3];
+                entries[i] = new Entry(args[base], args[base + 1], lmiClass, lmiResourceId);
+            }
+        }
         SWF swf = new SWF(new BufferedInputStream(new FileInputStream(args[0])), false);
         PatchTarget target = findGlobalCinit(swf);
         if (target == null) {
             throw new IllegalStateException("Data.Global static initializer not found");
         }
-        injectSingleEntryArrays(target, args[2], args[3], lmiClass, lmiResourceId);
+        for (Entry entry : entries) {
+            injectSingleEntryArrays(
+                    target,
+                    entry.characterId,
+                    entry.sptClass,
+                    entry.lmiClass,
+                    entry.lmiResourceId
+            );
+        }
         swf.setModified(true);
         try (OutputStream os = new FileOutputStream(args[1])) {
             swf.saveTo(os);
         }
         System.out.println(
-                "{\"success\":true,\"patched\":\"single_registry_entry\","
-                        + "\"character_id\":\"" + jsonEscape(args[2]) + "\","
-                        + "\"spt_class\":\"" + jsonEscape(args[3]) + "\","
+                "{\"success\":true,\"patched\":\""
+                        + (singleMode ? "single_registry_entry" : "batch_registry_entries")
+                        + "\","
+                        + "\"entry_count\":" + entries.length + ","
+                        + "\"character_id\":\"" + jsonEscape(entries[0].characterId) + "\","
+                        + "\"spt_class\":\"" + jsonEscape(entries[0].sptClass) + "\","
                         + "\"lmi_class\":"
-                        + (lmiClass == null ? "null" : "\"" + jsonEscape(lmiClass) + "\"")
+                        + (entries[0].lmiClass == null
+                                ? "null"
+                                : "\"" + jsonEscape(entries[0].lmiClass) + "\"")
                         + "}"
         );
     }
@@ -405,6 +515,20 @@ public class HfeRegistryEntryPatch {
             this.sptClassesExisted = sptClassesExisted;
             this.lmiIdsExisted = lmiIdsExisted;
             this.lmiClassesExisted = lmiClassesExisted;
+        }
+    }
+
+    private static class Entry {
+        final String characterId;
+        final String sptClass;
+        final String lmiClass;
+        final String lmiResourceId;
+
+        Entry(String characterId, String sptClass, String lmiClass, String lmiResourceId) {
+            this.characterId = characterId;
+            this.sptClass = sptClass;
+            this.lmiClass = lmiClass;
+            this.lmiResourceId = lmiResourceId;
         }
     }
 

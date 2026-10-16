@@ -12,6 +12,7 @@ from hfe_character_tool.tools import (
     run_hfworkshop,
     run_tool,
     summarize_tool_result,
+    wrap_with_source_projector,
 )
 
 
@@ -138,6 +139,28 @@ def test_extract_projector_swf_reads_marker_and_length(tmp_path: Path) -> None:
     extract_projector_swf(exe, swf)
 
     assert swf.read_bytes() == swf_bytes
+
+
+def test_wrap_with_source_projector_preserves_source_exe_prefix(tmp_path: Path) -> None:
+    source_swf = b"FWSsource"
+    patched_swf = b"FWSpatched"
+    source_exe = tmp_path / "source.exe"
+    source_exe.write_bytes(
+        b"EYJA_PROJECTOR"
+        + source_swf
+        + bytes.fromhex("56 34 12 FA")
+        + len(source_swf).to_bytes(4, "little")
+    )
+    patched_swf_path = tmp_path / "patched.swf"
+    patched_swf_path.write_bytes(patched_swf)
+    output_exe = tmp_path / "candidate.exe"
+    extracted = tmp_path / "candidate.swf"
+
+    wrap_with_source_projector(source_exe, patched_swf_path, output_exe)
+    extract_projector_swf(output_exe, extracted)
+
+    assert output_exe.read_bytes().startswith(b"EYJA_PROJECTOR")
+    assert extracted.read_bytes() == patched_swf
 
 
 def test_extract_projector_swf_rejects_missing_marker(tmp_path: Path) -> None:

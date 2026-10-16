@@ -10,6 +10,7 @@ from hfe_character_tool.hfworkshop_catalog import (
     item_label,
 )
 from hfe_character_tool.models import (
+    AFTERIMAGE_MAX_DELAY,
     DEFAULT_ITEM_FRAME_EDIT,
     CharacterProject,
     ExportResult,
@@ -359,3 +360,59 @@ def _numbered_character_id(index: int) -> str:
     if index <= 99:
         return f"eyj{index:02d}"
     return f"e{index:04d}"[-5:]
+
+
+def add_afterimage_delay(existing: tuple[int, ...], raw_delay: str) -> tuple[int, ...]:
+    """Add one afterimage; duplicates are kept once."""
+    delay = _parse_afterimage_number(raw_delay, "延迟帧数")
+    _check_afterimage_delay(delay)
+    return tuple(sorted({*existing, delay}))
+
+
+def quick_add_afterimage_delays(
+    existing: tuple[int, ...], raw_count: str, raw_start: str, raw_step: str
+) -> tuple[int, ...]:
+    """Add `count` afterimages delayed start, start+step, ... frames."""
+    count = _parse_afterimage_number(raw_count, "数量")
+    start = _parse_afterimage_number(raw_start, "起始延迟")
+    step = _parse_afterimage_number(raw_step, "间隔")
+    if count < 1:
+        raise ValueError("数量至少为 1。")
+    if step < 1:
+        raise ValueError("间隔至少为 1 帧。")
+    delays = [start + step * index for index in range(count)]
+    for delay in delays:
+        _check_afterimage_delay(delay)
+    return tuple(sorted({*existing, *delays}))
+
+
+def remove_afterimage_delays(
+    existing: tuple[int, ...], to_remove: tuple[int, ...]
+) -> tuple[int, ...]:
+    removed = set(to_remove)
+    return tuple(delay for delay in existing if delay not in removed)
+
+
+def afterimage_delay_label(delay: int) -> str:
+    return f"延迟 {delay} 帧（约 {delay / 30:.2f} 秒）"
+
+
+def afterimage_summary(delays: tuple[int, ...]) -> str:
+    if not delays:
+        return "当前没有残影。"
+    return f"当前 {len(delays)} 个残影：延迟 " + "、".join(str(d) for d in delays) + " 帧。"
+
+
+def _parse_afterimage_number(raw: str, label: str) -> int:
+    text = raw.strip()
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ValueError(f"{label}必须是整数：{text or '（空）'}") from exc
+
+
+def _check_afterimage_delay(delay: int) -> None:
+    if not 1 <= delay <= AFTERIMAGE_MAX_DELAY:
+        raise ValueError(
+            f"残影延迟必须在 1-{AFTERIMAGE_MAX_DELAY} 帧之间（30 帧约 1 秒），当前为 {delay}。"
+        )

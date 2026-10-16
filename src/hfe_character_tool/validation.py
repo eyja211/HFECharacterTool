@@ -12,7 +12,13 @@ from hfe_character_tool.hfworkshop_catalog import (
     load_texture_roles,
     resolve_action_frame_index_from_options,
 )
-from hfe_character_tool.models import CharacterProject, Severity, ValidationIssue, ValidationReport
+from hfe_character_tool.models import (
+    AFTERIMAGE_MAX_DELAY,
+    CharacterProject,
+    Severity,
+    ValidationIssue,
+    ValidationReport,
+)
 from hfe_character_tool.projects import check_project_structure
 from hfe_character_tool.target_cache import (
     TargetCacheEntry,
@@ -423,7 +429,37 @@ def _validate(
             )
         )
 
+    issues.extend(_validate_afterimage(project))
     return ValidationReport(tuple(issues))
+
+
+AFTERIMAGE_HEAVY_COUNT = 30
+
+
+def _validate_afterimage(project: CharacterProject) -> list[ValidationIssue]:
+    settings = project.afterimage
+    issues: list[ValidationIssue] = []
+    bad = [d for d in settings.delays if not 1 <= d <= AFTERIMAGE_MAX_DELAY]
+    if bad:
+        issues.append(
+            ValidationIssue(
+                Severity.ERROR,
+                f"残影延迟必须在 1-{AFTERIMAGE_MAX_DELAY} 帧之间。",
+                "请删除超出范围的残影后再导出。",
+                "afterimage.delays",
+                ", ".join(str(d) for d in bad),
+            )
+        )
+    if len(settings.delays) > AFTERIMAGE_HEAVY_COUNT:
+        issues.append(
+            ValidationIssue(
+                Severity.WARNING,
+                f"已添加 {len(settings.delays)} 个残影，同屏多个该角色时可能掉帧。",
+                "残影数量不设上限；如果游戏内卡顿，请减少残影数量。",
+                "afterimage.delays",
+            )
+        )
+    return issues
 
 
 def _validate_target_cache(target_cache: TargetCacheEntry) -> list[ValidationIssue]:

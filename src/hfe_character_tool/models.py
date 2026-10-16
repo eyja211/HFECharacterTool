@@ -103,6 +103,25 @@ class TargetGame:
 DEFAULT_TARGET_GAME = TargetGame()
 
 
+AFTERIMAGE_MAX_DELAY = 90
+
+
+@dataclass(frozen=True)
+class AfterimageSettings:
+    """残影：每个延迟帧数一个残影；伤害开关同时管拳脚/技能命中与抓投。"""
+
+    delays: tuple[int, ...] = ()
+    damage: bool = True
+    items: bool = True
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.delays)
+
+
+DEFAULT_AFTERIMAGE = AfterimageSettings()
+
+
 @dataclass(frozen=True)
 class CharacterProject:
     project_name: str
@@ -118,6 +137,7 @@ class CharacterProject:
     item_frame_edits: tuple[FrameItemEdit, ...] = (DEFAULT_ITEM_FRAME_EDIT,)
     texture_selections: Mapping[str, str] = field(default_factory=dict)
     target_game: TargetGame = DEFAULT_TARGET_GAME
+    afterimage: AfterimageSettings = DEFAULT_AFTERIMAGE
     assets: tuple[AssetEntry, ...] = ()
     exports: tuple[ExportRecord, ...] = ()
     created_at: str = ""
@@ -166,6 +186,11 @@ def project_to_dict(project: CharacterProject) -> dict[str, Any]:
         "item_frame_edits": [_frame_item_edit_to_dict(edit) for edit in project.item_frame_edits],
         "textures": dict(project.texture_selections),
         "target_game": _target_game_to_dict(project.target_game),
+        "afterimage": {
+            "delays": list(project.afterimage.delays),
+            "damage": project.afterimage.damage,
+            "items": project.afterimage.items,
+        },
         "assets": [
             {"file_name": asset.file_name, "purpose": asset.purpose, "status": asset.status}
             for asset in project.assets
@@ -218,6 +243,7 @@ def project_from_dict(data: Mapping[str, Any]) -> CharacterProject:
             {str(k): str(v) for k, v in _mapping(data.get("textures")).items()}
         ),
         target_game=_target_game_from_mapping(_mapping(data.get("target_game"))),
+        afterimage=_afterimage_from_mapping(_mapping(data.get("afterimage"))),
         assets=tuple(
             AssetEntry(
                 file_name=str(_mapping(asset).get("file_name", "")),
@@ -325,6 +351,22 @@ def _target_game_from_mapping(value: Mapping[str, Any]) -> TargetGame:
     )
 
 
+def _afterimage_from_mapping(value: Mapping[str, Any]) -> AfterimageSettings:
+    if not value:
+        return DEFAULT_AFTERIMAGE
+    delays: set[int] = set()
+    for raw in _sequence(value.get("delays")):
+        try:
+            delays.add(int(cast(Any, raw)))
+        except (TypeError, ValueError):
+            continue
+    return AfterimageSettings(
+        delays=tuple(sorted(delays)),
+        damage=bool(value.get("damage", True)),
+        items=bool(value.get("items", True)),
+    )
+
+
 def _frame_item_edit_from_mapping(value: Mapping[str, Any]) -> FrameItemEdit:
     slots = tuple(
         _item_spawn_slot_from_mapping(_mapping(slot))
@@ -408,6 +450,7 @@ class InternalCharacter:
     item_frame_edits: tuple[FrameItemEdit, ...]
     assets: tuple[AssetEntry, ...]
     texture_selections: Mapping[str, str] = field(default_factory=dict)
+    afterimage: AfterimageSettings = DEFAULT_AFTERIMAGE
 
 
 @dataclass(frozen=True)

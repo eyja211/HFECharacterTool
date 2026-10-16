@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from hfe_character_tool.models import TargetGame
+from hfe_character_tool.swf_probe import PROBE_SCHEMA_VERSION
 from hfe_character_tool.target_cache import (
     TargetCacheEntry,
     TargetCacheError,
@@ -136,7 +137,7 @@ def _fake_probe(*_args: object) -> SimpleNamespace:
             "classes": {"Data.Global": True},
             "string_constants": {"loadBinaryFileCount": True, "loadtimeOffSet": True},
             "multiname_constants": {"LoadFromCompressedBytes": True},
-            "probe_schema_version": 5,
+            "probe_schema_version": PROBE_SCHEMA_VERSION,
             "abc_data_global_classes": ["Data.Global_lucasSpt"],
             "missing_symbol_abc_classes": [],
             "global_pow_character_ids": ["lucas"],

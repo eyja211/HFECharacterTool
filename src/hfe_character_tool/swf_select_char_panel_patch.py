@@ -18,6 +18,14 @@ class SelectCharPanelPatchResult:
     run_result: ToolResult
 
 
+@dataclass(frozen=True)
+class SelectCharPanelOptionEntry:
+    character_id: str
+    display_name: str
+    option_value: int
+    source_character_id: str = ""
+
+
 def patch_select_char_panel_options(
     input_swf: Path,
     output_swf: Path,
@@ -84,6 +92,79 @@ def patch_select_char_panel_options(
     )
 
 
+def patch_select_char_panel_option_entries(
+    input_swf: Path,
+    output_swf: Path,
+    tools: ToolConfig,
+    cwd: Path,
+    entries: tuple[SelectCharPanelOptionEntry, ...],
+    output_exe: Path | None = None,
+) -> SelectCharPanelPatchResult:
+    if not entries:
+        raise ValueError("At least one VS option entry is required.")
+    source_path = write_select_char_panel_patch_source(output_swf.parent)
+    class_dir = output_swf.parent / "select_char_panel_patch_classes"
+    class_dir.mkdir(exist_ok=True)
+    compile_result = run_tool(
+        (
+            "javac",
+            "-encoding",
+            "UTF-8",
+            "-cp",
+            str(tools.ffdec),
+            "-d",
+            str(class_dir),
+            str(source_path),
+        ),
+        cwd,
+    )
+    if not compile_result.success:
+        return SelectCharPanelPatchResult(
+            source_path,
+            class_dir,
+            output_swf,
+            None,
+            compile_result,
+            ToolResult(False, -1, "", "select char panel patch compile failed"),
+        )
+    entry_args: list[str] = []
+    for entry in entries:
+        entry_args.extend(
+            (
+                entry.character_id,
+                entry.display_name,
+                str(entry.option_value),
+                entry.source_character_id,
+            )
+        )
+    classpath = f"{class_dir};{tools.ffdec}"
+    run_result = run_tool(
+        (
+            "java",
+            "-cp",
+            classpath,
+            SELECT_CHAR_PANEL_PATCH_CLASS_NAME,
+            str(input_swf),
+            str(output_swf),
+            "--batch",
+            *entry_args,
+        ),
+        cwd,
+    )
+    actual_exe = None
+    if run_result.success and output_exe is not None:
+        wrap_with_projector(tools.projector, output_swf, output_exe)
+        actual_exe = output_exe
+    return SelectCharPanelPatchResult(
+        source_path,
+        class_dir,
+        output_swf,
+        actual_exe,
+        compile_result,
+        run_result,
+    )
+
+
 def write_select_char_panel_patch_source(output_dir: Path) -> Path:
     output_dir.mkdir(exist_ok=True)
     path = output_dir / f"{SELECT_CHAR_PANEL_PATCH_CLASS_NAME}.java"
@@ -113,6 +194,56 @@ import java.util.List;
 
 public class HfeSelectCharPanelPatch {
     public static void main(String[] args) throws Exception {
+        if (args.length >= 3 && "--batch".equals(args[2])) {
+            if (((args.length - 3) % 4) != 0) {
+                throw new IllegalArgumentException(
+                        "Batch usage: HfeSelectCharPanelPatch <in.swf> <out.swf> --batch "
+                                + "(<id> <displayName> <optionValue> <sourceCharacterId>)+"
+                );
+            }
+            SWF swf = new SWF(new BufferedInputStream(new FileInputStream(args[0])), false);
+            PatchTarget target = findSelectCharPanelCinit(swf);
+            if (target == null) {
+                throw new IllegalStateException(
+                        "Web_misc.SelectCharPanel static initializer not found"
+                );
+            }
+            int charOptionQName = findStaticTraitQName(target, "charOption");
+            int entryCount = (args.length - 3) / 4;
+            for (int i = 0; i < entryCount; i++) {
+                int base = 3 + (i * 4);
+                Entry entry = new Entry(
+                        args[base],
+                        args[base + 1],
+                        Integer.parseInt(args[base + 2]),
+                        args[base + 3]
+                );
+                int optionValue = resolveOptionValue(
+                        target, charOptionQName, entry.optionValue, entry.sourceCharacterId
+                );
+                boolean alreadyPresent = bodyPushesString(
+                        target.abc, target.body, entry.characterId
+                );
+                if (!alreadyPresent) {
+                    injectCharOptionPush(
+                            target,
+                            charOptionQName,
+                            entry.characterId,
+                            entry.displayName,
+                            optionValue
+                    );
+                }
+            }
+            swf.setModified(true);
+            try (OutputStream os = new FileOutputStream(args[1])) {
+                swf.saveTo(os);
+            }
+            System.out.println(
+                    "{\"success\":true,\"patched\":\"select_char_panel_option_batch\","
+                            + "\"entry_count\":" + entryCount + "}"
+            );
+            return;
+        }
         if (args.length != 5 && args.length != 6) {
             throw new IllegalArgumentException(
                     "Usage: HfeSelectCharPanelPatch <in.swf> <out.swf> "
@@ -134,21 +265,13 @@ public class HfeSelectCharPanelPatch {
         int charOptionQName = findStaticTraitQName(target, "charOption");
         boolean sourceOptionFound = false;
         boolean usedFallbackOptionValue = false;
-        if (optionValue == -2) {
-            optionValue = findNextCharOptionValue(target, charOptionQName);
-            usedFallbackOptionValue = true;
-        }
-        if (optionValue < 0 && !sourceCharacterId.isEmpty()) {
-            int sourceOptionValue = findSourceOptionValue(target, sourceCharacterId);
-            if (sourceOptionValue >= 0) {
-                optionValue = sourceOptionValue;
-                sourceOptionFound = true;
-            }
-        }
-        if (optionValue < 0) {
-            optionValue = findNextCharOptionValue(target, charOptionQName);
-            usedFallbackOptionValue = true;
-        }
+        int originalOptionValue = optionValue;
+        optionValue = resolveOptionValue(target, charOptionQName, optionValue, sourceCharacterId);
+        sourceOptionFound = originalOptionValue < 0
+                && !sourceCharacterId.isEmpty()
+                && optionValue == findSourceOptionValue(target, sourceCharacterId);
+        usedFallbackOptionValue = originalOptionValue == -2
+                || (originalOptionValue < 0 && !sourceOptionFound);
         boolean alreadyPresent = bodyPushesString(target.abc, target.body, characterId);
         if (!alreadyPresent) {
             injectCharOptionPush(target, charOptionQName, characterId, displayName, optionValue);
@@ -167,6 +290,27 @@ public class HfeSelectCharPanelPatch {
                         + "\"used_fallback_option_value\":" + usedFallbackOptionValue + ","
                         + "\"already_present\":" + alreadyPresent + "}"
         );
+    }
+
+    private static int resolveOptionValue(
+            PatchTarget target,
+            int charOptionQName,
+            int optionValue,
+            String sourceCharacterId
+    ) {
+        if (optionValue == -2) {
+            return findNextCharOptionValue(target, charOptionQName);
+        }
+        if (optionValue < 0 && !sourceCharacterId.isEmpty()) {
+            int sourceOptionValue = findSourceOptionValue(target, sourceCharacterId);
+            if (sourceOptionValue >= 0) {
+                return sourceOptionValue;
+            }
+        }
+        if (optionValue < 0) {
+            return findNextCharOptionValue(target, charOptionQName);
+        }
+        return optionValue;
     }
 
     private static PatchTarget findSelectCharPanelCinit(SWF swf) {
@@ -394,6 +538,25 @@ public class HfeSelectCharPanelPatch {
             this.abc = abc;
             this.body = body;
             this.classIndex = classIndex;
+        }
+    }
+
+    private static class Entry {
+        final String characterId;
+        final String displayName;
+        final int optionValue;
+        final String sourceCharacterId;
+
+        Entry(
+                String characterId,
+                String displayName,
+                int optionValue,
+                String sourceCharacterId
+        ) {
+            this.characterId = characterId;
+            this.displayName = displayName;
+            this.optionValue = optionValue;
+            this.sourceCharacterId = sourceCharacterId;
         }
     }
 }

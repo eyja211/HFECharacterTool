@@ -37,4 +37,6 @@ def test_registry_entry_patch_source_appends_to_existing_registration_arrays(
     assert "initEmptyArray" in source
     assert "qualifiedClassQName" in source
     assert "single_registry_entry" in source
+    assert "batch_registry_entries" in source
+    assert "Entry[] entries" in source
     assert "swf.saveTo" in source

@@ -115,4 +115,5 @@ def to_internal_character(project: CharacterProject) -> InternalCharacter:
         item_frame_edits=project.item_frame_edits,
         assets=assets,
         texture_selections=project.texture_selections,
+        afterimage=project.afterimage,
     )

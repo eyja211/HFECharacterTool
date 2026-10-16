@@ -346,6 +346,29 @@ public class HfeLoadAllDataPatch {
         return hasGetLocal && hasIncrement && hasSetLocal && hasJump;
     }
 
+    // A compiler-emitted (Flex) loop jumps back to a `label` instruction; the loop an
+    // older exporter inserted never emitted one. Native loops (HFEP's sptIds/lmiIds
+    // loader) load every array entry, so appending to the arrays is enough.
+    private static boolean isNativeLabelLoop(AVM2Code code, int callIndex) {
+        int stop = Math.min(code.code.size(), callIndex + 12);
+        for (int i = callIndex + 1; i < stop; i++) {
+            AVM2Instruction ins = code.code.get(i);
+            if (!"jump".equals(ins.definition.instructionName)) {
+                continue;
+            }
+            long target = ins.getTargetAddress();
+            if (target >= ins.getAddress()) {
+                continue;
+            }
+            for (AVM2Instruction candidate : code.code) {
+                if (candidate.getAddress() == target) {
+                    return "label".equals(candidate.definition.instructionName);
+                }
+            }
+        }
+        return false;
+    }
+
     private static boolean hasUnsafeRuntimeLoopCustomLoads(AVM2Code code, ABC abc, Const c)
             throws Exception {
         return hasRuntimeLoopCustomLoad(
@@ -369,7 +392,7 @@ public class HfeLoadAllDataPatch {
             }
             if (hasCustomArrayOperandsBeforeCall(
                     code, i, abc, targetLoaderName, idsName, classesName
-            ) && hasLoopProgressAfterCall(code, i, c)) {
+            ) && hasLoopProgressAfterCall(code, i, c) && !isNativeLabelLoop(code, i)) {
                 return true;
             }
         }
@@ -392,6 +415,10 @@ public class HfeLoadAllDataPatch {
             if (hasCustomArrayOperandsBeforeCall(
                     code, i, abc, targetLoaderName, idsName, classesName
             )) {
+                if (isNativeLabelLoop(code, i)) {
+                    // The target's own loop loads every registered entry at runtime.
+                    return Integer.MAX_VALUE;
+                }
                 count++;
             }
         }

@@ -15,6 +15,9 @@ from hfe_character_tool.export import export_project
 from hfe_character_tool.gui_presenter import (
     CharacterForm,
     ItemSlotForm,
+    add_afterimage_delay,
+    afterimage_delay_label,
+    afterimage_summary,
     apply_form,
     disabled_item_label,
     focus_target,
@@ -24,6 +27,8 @@ from hfe_character_tool.gui_presenter import (
     next_project_defaults,
     project_rows,
     project_to_form,
+    quick_add_afterimage_delays,
+    remove_afterimage_delays,
     render_export_result,
     render_validation_report,
     selected_item_label,
@@ -47,6 +52,7 @@ from hfe_character_tool.hfworkshop_catalog import (
 )
 from hfe_character_tool.models import (
     DEFAULT_TARGET_GAME,
+    AfterimageSettings,
     CharacterProject,
     ExportResult,
     ItemSpawnSlot,
@@ -584,11 +590,14 @@ class HfeCharacterApp(tk.Tk):
         self.edit_tab = self._glass_canvas(self.notebook, profile=page_profile)
         self.asset_tab = self._glass_canvas(self.notebook, profile=page_profile)
         self.export_tab = self._glass_canvas(self.notebook, profile=page_profile)
+        self.afterimage_tab = self._glass_canvas(self.notebook, profile=page_profile)
         self._add_tab(self.edit_tab, "编辑角色", 0)
         self._add_tab(self.asset_tab, "贴图与技能", 1)
-        self._add_tab(self.export_tab, "校验导出", 2)
+        self._add_tab(self.afterimage_tab, "残影", 2)
+        self._add_tab(self.export_tab, "校验导出", 3)
         self._build_edit_tab()
         self._build_asset_tab()
+        self._build_afterimage_tab()
         self._build_export_tab()
         self._select_tab(self.edit_tab)
         self.surface.bind("<Configure>", self._refresh_background)
@@ -664,6 +673,151 @@ class HfeCharacterApp(tk.Tk):
         )
         self.project_control_widgets.append(random_button)
         self.edit_tab.columnconfigure(1, weight=1)
+
+    def _build_afterimage_tab(self) -> None:
+        tab = self.afterimage_tab
+        self.afterimage_delays: tuple[int, ...] = ()
+        self.afterimage_damage_var = tk.BooleanVar(value=True)
+        self.afterimage_items_var = tk.BooleanVar(value=True)
+        self.afterimage_single_var = tk.StringVar(value="10")
+        self.afterimage_count_var = tk.StringVar(value="20")
+        self.afterimage_start_var = tk.StringVar(value="1")
+        self.afterimage_step_var = tk.StringVar(value="1")
+        self.afterimage_summary_var = tk.StringVar(value=afterimage_summary(()))
+        ttk.Label(
+            tab,
+            text=(
+                "残影会重演角色若干帧之前的动作和走位（30 帧约 1 秒），半透明显示，\n"
+                "不能被攻击、不能被抓。每个延迟帧数只能有一个残影，范围 1-90 帧。"
+            ),
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=24, pady=(18, 8))
+
+        single = tk.Frame(tab, background=GLASS_WIDGET_BG)
+        single.grid(row=1, column=0, columnspan=2, sticky="w", padx=24, pady=4)
+        ttk.Label(single, text="单独添加：延迟").pack(side="left")
+        single_entry = ttk.Entry(single, textvariable=self.afterimage_single_var, width=6)
+        single_entry.pack(side="left", padx=4)
+        ttk.Label(single, text="帧的残影").pack(side="left")
+        single_button = ttk.Button(single, text="添加", command=self.add_single_afterimage)
+        single_button.pack(side="left", padx=(12, 0))
+
+        quick = tk.Frame(tab, background=GLASS_WIDGET_BG)
+        quick.grid(row=2, column=0, columnspan=2, sticky="w", padx=24, pady=4)
+        ttk.Label(quick, text="快速添加：").pack(side="left")
+        count_entry = ttk.Entry(quick, textvariable=self.afterimage_count_var, width=4)
+        count_entry.pack(side="left")
+        ttk.Label(quick, text="个残影，延迟从").pack(side="left", padx=(4, 0))
+        start_entry = ttk.Entry(quick, textvariable=self.afterimage_start_var, width=4)
+        start_entry.pack(side="left", padx=4)
+        ttk.Label(quick, text="帧开始，每个多延迟").pack(side="left")
+        step_entry = ttk.Entry(quick, textvariable=self.afterimage_step_var, width=4)
+        step_entry.pack(side="left", padx=4)
+        ttk.Label(quick, text="帧").pack(side="left")
+        quick_button = ttk.Button(quick, text="批量添加", command=self.quick_add_afterimages)
+        quick_button.pack(side="left", padx=(12, 0))
+        ttk.Label(
+            tab,
+            text="例：20 个、从 1 帧开始、每个多延迟 1 帧 = 添加延迟 1-20 帧的 20 个残影。",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=24, pady=(0, 8))
+
+        list_frame = tk.Frame(tab, background=GLASS_WIDGET_BG)
+        list_frame.grid(row=4, column=0, sticky="nsew", padx=(24, 8), pady=4)
+        self.afterimage_list = tk.Listbox(
+            list_frame, selectmode="extended", height=8, width=34, exportselection=False
+        )
+        scrollbar = ttk.Scrollbar(
+            list_frame, orient="vertical", command=self.afterimage_list.yview
+        )
+        self.afterimage_list.configure(yscrollcommand=scrollbar.set)
+        self.afterimage_list.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="left", fill="y")
+
+        side = tk.Frame(tab, background=GLASS_WIDGET_BG)
+        side.grid(row=4, column=1, sticky="nw", padx=(8, 24), pady=4)
+        delete_button = ttk.Button(side, text="删除选中", command=self.delete_selected_afterimages)
+        delete_button.pack(fill="x")
+        clear_button = ttk.Button(side, text="全部删除", command=self.clear_afterimages)
+        clear_button.pack(fill="x", pady=(6, 0))
+        ttk.Label(side, text="按住 Ctrl 或 Shift\n可以多选。").pack(anchor="w", pady=(10, 0))
+
+        damage_check = ttk.Checkbutton(
+            tab,
+            text="残影本体可以造成伤害（拳脚、技能命中和抓投）",
+            variable=self.afterimage_damage_var,
+        )
+        damage_check.grid(row=5, column=0, columnspan=2, sticky="w", padx=24, pady=(10, 2))
+        items_check = ttk.Checkbutton(
+            tab,
+            text="残影可以发射 item（重放本体发出的道具，命中算本体的）",
+            variable=self.afterimage_items_var,
+        )
+        items_check.grid(row=6, column=0, columnspan=2, sticky="w", padx=24, pady=2)
+        ttk.Label(tab, textvariable=self.afterimage_summary_var, wraplength=620).grid(
+            row=7, column=0, columnspan=2, sticky="w", padx=24, pady=(8, 2)
+        )
+        save_button = ttk.Button(tab, text="保存并校验", command=self.save_current)
+        save_button.grid(row=8, column=0, sticky="w", padx=24, pady=(10, 0))
+        tab.columnconfigure(0, weight=1)
+        self.project_control_widgets.extend(
+            (
+                single_entry,
+                single_button,
+                count_entry,
+                start_entry,
+                step_entry,
+                quick_button,
+                self.afterimage_list,
+                delete_button,
+                clear_button,
+                damage_check,
+                items_check,
+                save_button,
+            )
+        )
+
+    def _set_afterimage_delays(self, delays: tuple[int, ...]) -> None:
+        self.afterimage_delays = delays
+        # A disabled Listbox silently ignores insert/delete; the form is loaded while
+        # project controls are still disabled.
+        previous_state = str(self.afterimage_list.cget("state"))
+        self.afterimage_list.configure(state="normal")
+        self.afterimage_list.delete(0, "end")
+        for delay in delays:
+            self.afterimage_list.insert("end", afterimage_delay_label(delay))
+        self.afterimage_list["state"] = previous_state
+        self.afterimage_summary_var.set(afterimage_summary(delays))
+
+    def add_single_afterimage(self) -> None:
+        try:
+            delays = add_afterimage_delay(self.afterimage_delays, self.afterimage_single_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("无法添加残影", str(exc))
+            return
+        self._set_afterimage_delays(delays)
+
+    def quick_add_afterimages(self) -> None:
+        try:
+            delays = quick_add_afterimage_delays(
+                self.afterimage_delays,
+                self.afterimage_count_var.get(),
+                self.afterimage_start_var.get(),
+                self.afterimage_step_var.get(),
+            )
+        except ValueError as exc:
+            messagebox.showwarning("无法批量添加残影", str(exc))
+            return
+        self._set_afterimage_delays(delays)
+
+    def delete_selected_afterimages(self) -> None:
+        indexes = cast(Any, self.afterimage_list).curselection()
+        selected = tuple(self.afterimage_delays[i] for i in indexes)
+        if selected:
+            self._set_afterimage_delays(remove_afterimage_delays(self.afterimage_delays, selected))
+
+    def clear_afterimages(self) -> None:
+        if self.afterimage_delays and messagebox.askyesno("全部删除", "删除这个角色的全部残影？"):
+            self._set_afterimage_delays(())
 
     def _glass_canvas(
         self,
@@ -1937,6 +2091,9 @@ class HfeCharacterApp(tk.Tk):
             self.texture_vars[part.part_id].set(
                 selected_texture_role_label(value, self.texture_roles)
             )
+        self._set_afterimage_delays(project.afterimage.delays)
+        self.afterimage_damage_var.set(project.afterimage.damage)
+        self.afterimage_items_var.set(project.afterimage.items)
         self._set_project_controls_enabled(True)
 
     def save_current(self) -> None:
@@ -2020,6 +2177,11 @@ class HfeCharacterApp(tk.Tk):
         updated = replace_project(
             updated,
             item_frame_edits=frame_item_edits_from_drafts(self.item_frame_drafts),
+            afterimage=AfterimageSettings(
+                delays=self.afterimage_delays,
+                damage=bool(self.afterimage_damage_var.get()),
+                items=bool(self.afterimage_items_var.get()),
+            ),
         )
         save_project(self.current_project_dir, updated)
         self._current_source_role_id = updated.source_role_id or "lucas"

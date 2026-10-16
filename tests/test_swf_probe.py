@@ -66,5 +66,7 @@ def test_parse_probe_json_returns_dict() -> None:
 
 
 def test_probe_schema_version_requires_custom_loader_style() -> None:
-    assert PROBE_SCHEMA_VERSION == 5
-    assert '\\"probe_schema_version\\":5' in PROBE_JAVA_SOURCE
+    assert PROBE_SCHEMA_VERSION == 6
+    assert '\\"probe_schema_version\\":6' in PROBE_JAVA_SOURCE
+    # v6: a Flex-native loader loop (HFEP's own sptIds/lmiIds loop) is reported separately.
+    assert '"native_loop"' in PROBE_JAVA_SOURCE

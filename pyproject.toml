@@ -31,10 +31,20 @@ python_version = "3.8"
 strict = true
 mypy_path = "src"
 
+# Vendored byte-for-byte from the hfport porter; validated by byte-exact round trips.
+[[tool.mypy.overrides]]
+module = "hfe_character_tool.abc_vendor.*"
+ignore_errors = true
+
+# These call into the untyped vendored helpers above.
+[[tool.mypy.overrides]]
+module = ["hfe_character_tool.afterimage_patch", "test_afterimage_patch", "afterimage_vm"]
+disallow_untyped_calls = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py38"
-extend-exclude = ["output/**"]
+extend-exclude = ["output/**", "src/hfe_character_tool/abc_vendor/**"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM"]

@@ -141,7 +141,23 @@ def wrap_with_projector(projector_exe: Path, swf_path: Path, output_exe: Path) -
     )
 
 
+def wrap_with_source_projector(source_exe: Path, swf_path: Path, output_exe: Path) -> None:
+    marker = bytes.fromhex("56 34 12 FA")
+    projector_bytes, _source_swf = _split_projector_exe(source_exe)
+    swf_bytes = swf_path.read_bytes()
+    output_exe.parent.mkdir(exist_ok=True)
+    output_exe.write_bytes(
+        projector_bytes + swf_bytes + marker + len(swf_bytes).to_bytes(4, "little")
+    )
+
+
 def extract_projector_swf(exe_path: Path, swf_path: Path) -> None:
+    _projector_bytes, swf_bytes = _split_projector_exe(exe_path)
+    swf_path.parent.mkdir(exist_ok=True)
+    swf_path.write_bytes(swf_bytes)
+
+
+def _split_projector_exe(exe_path: Path) -> tuple[bytes, bytes]:
     marker = bytes.fromhex("56 34 12 FA")
     data = exe_path.read_bytes()
     if len(data) < 8:
@@ -154,8 +170,7 @@ def extract_projector_swf(exe_path: Path, swf_path: Path) -> None:
     swf_bytes = data[swf_start:marker_start]
     if not swf_bytes.startswith((b"FWS", b"CWS", b"ZWS")):
         raise ValueError("EXE 末尾数据不是可识别的 SWF。")
-    swf_path.parent.mkdir(exist_ok=True)
-    swf_path.write_bytes(swf_bytes)
+    return data[:swf_start], swf_bytes
 
 
 def _tool_paths(config: ToolConfig) -> tuple[tuple[str, Path], ...]:

@@ -13,7 +13,7 @@ from hfe_character_tool.tools import (
 )
 
 PROBE_CLASS_NAME = "HfeSwfProbe"
-PROBE_SCHEMA_VERSION = 5
+PROBE_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -291,7 +291,7 @@ public class HfeSwfProbe {
 
         StringBuilder out = new StringBuilder();
         out.append("{");
-        out.append("\"probe_schema_version\":5,");
+        out.append("\"probe_schema_version\":6,");
         out.append("\"abc_count\":").append(abcCount).append(",");
         out.append("\"symbol_class_count\":").append(symbolClassCount).append(",");
         out.append("\"max_symbol_id\":").append(maxSymbolId).append(",");
@@ -760,7 +760,9 @@ public class HfeSwfProbe {
                 || "lv_".equals(value)
                 || "exp_".equals(value)
                 || "c".equals(value)
-                || "fake_hp".equals(value);
+                || "fake_hp".equals(value)
+                || "en".equals(value)
+                || "b5".equals(value);
     }
 
     private static boolean isPowReferenceNear(AVM2Code code, int beforeIndex, int qname) {
@@ -960,7 +962,7 @@ public class HfeSwfProbe {
             boolean hasLoopProgress
     ) {
         if (hasLoopProgress) {
-            return "runtime_loop";
+            return isNativeLabelLoop(code, callIndex) ? "native_loop" : "runtime_loop";
         }
         int start = Math.max(0, callIndex - 25);
         for (int i = start; i < callIndex; i++) {
@@ -981,6 +983,29 @@ public class HfeSwfProbe {
         for (int i = start; i < callIndex; i++) {
             if (isGetLex(abc, code.code.get(i), qname)) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    // A compiler-emitted (Flex) loop jumps back to a `label` instruction; the loop the
+    // old exporter inserted through FFDec never emitted one. HFEP's own sptIds/lmiIds
+    // loader is the native kind and already loads every array entry.
+    private static boolean isNativeLabelLoop(AVM2Code code, int callIndex) {
+        int stop = Math.min(code.code.size(), callIndex + 12);
+        for (int i = callIndex + 1; i < stop; i++) {
+            AVM2Instruction ins = code.code.get(i);
+            if (!"jump".equals(ins.definition.instructionName)) {
+                continue;
+            }
+            long target = ins.getTargetAddress();
+            if (target >= ins.getAddress()) {
+                continue;
+            }
+            for (AVM2Instruction candidate : code.code) {
+                if (candidate.getAddress() == target) {
+                    return "label".equals(candidate.definition.instructionName);
+                }
             }
         }
         return false;

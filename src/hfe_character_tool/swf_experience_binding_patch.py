@@ -18,6 +18,12 @@ class ExperienceBindingPatchResult:
     run_result: ToolResult
 
 
+@dataclass(frozen=True)
+class ExperienceBindingEntry:
+    character_id: str
+    bound_character_id: str
+
+
 def patch_experience_binding(
     input_swf: Path,
     output_swf: Path,
@@ -80,6 +86,72 @@ def patch_experience_binding(
     )
 
 
+def patch_experience_bindings(
+    input_swf: Path,
+    output_swf: Path,
+    tools: ToolConfig,
+    cwd: Path,
+    entries: tuple[ExperienceBindingEntry, ...],
+    output_exe: Path | None = None,
+) -> ExperienceBindingPatchResult:
+    if not entries:
+        raise ValueError("At least one experience binding entry is required.")
+    source_path = write_experience_binding_patch_source(output_swf.parent)
+    class_dir = output_swf.parent / "experience_binding_patch_classes"
+    class_dir.mkdir(exist_ok=True)
+    compile_result = run_tool(
+        (
+            "javac",
+            "-encoding",
+            "UTF-8",
+            "-cp",
+            str(tools.ffdec),
+            "-d",
+            str(class_dir),
+            str(source_path),
+        ),
+        cwd,
+    )
+    if not compile_result.success:
+        return ExperienceBindingPatchResult(
+            source_path,
+            class_dir,
+            output_swf,
+            None,
+            compile_result,
+            ToolResult(False, -1, "", "experience binding patch compile failed"),
+        )
+    entry_args: list[str] = []
+    for entry in entries:
+        entry_args.extend((entry.character_id, entry.bound_character_id))
+    classpath = f"{class_dir};{tools.ffdec}"
+    run_result = run_tool(
+        (
+            "java",
+            "-cp",
+            classpath,
+            EXPERIENCE_BINDING_PATCH_CLASS_NAME,
+            str(input_swf),
+            str(output_swf),
+            "--batch",
+            *entry_args,
+        ),
+        cwd,
+    )
+    actual_exe = None
+    if run_result.success and output_exe is not None:
+        wrap_with_projector(tools.projector, output_swf, output_exe)
+        actual_exe = output_exe
+    return ExperienceBindingPatchResult(
+        source_path,
+        class_dir,
+        output_swf,
+        actual_exe,
+        compile_result,
+        run_result,
+    )
+
+
 def write_experience_binding_patch_source(output_dir: Path) -> Path:
     output_dir.mkdir(exist_ok=True)
     path = output_dir / f"{EXPERIENCE_BINDING_PATCH_CLASS_NAME}.java"
@@ -112,6 +184,44 @@ import java.util.List;
 
 public class HfeExperienceBindingPatch {
     public static void main(String[] args) throws Exception {
+        if (args.length >= 3 && "--batch".equals(args[2])) {
+            if (((args.length - 3) % 2) != 0) {
+                throw new IllegalArgumentException(
+                        "Batch usage: HfeExperienceBindingPatch <in.swf> <out.swf> --batch "
+                                + "(<characterId> <boundCharacterId>)+"
+                );
+            }
+            SWF swf = new SWF(new BufferedInputStream(new FileInputStream(args[0])), false);
+            MethodRef login = findMethod(swf, "Data.Global", "LoginStatusMessage", true);
+            if (login == null) {
+                throw new IllegalStateException("Data.Global.static::LoginStatusMessage not found");
+            }
+            MethodRef genLevelUp = findMethod(swf, "Game.World", "GenLevelUpMsg", false);
+            if (genLevelUp == null) {
+                throw new IllegalStateException("Game.World.instance::GenLevelUpMsg not found");
+            }
+            int entryCount = (args.length - 3) / 2;
+            int worldBranchesPatched = 0;
+            for (int i = 0; i < entryCount; i++) {
+                int base = 3 + (i * 2);
+                String characterId = args[base];
+                String boundCharacterId = args[base + 1];
+                patchLoginExperienceBinding(login, characterId, boundCharacterId);
+                worldBranchesPatched += patchWorldSettlementBinding(
+                        genLevelUp, characterId, boundCharacterId
+                );
+            }
+            swf.setModified(true);
+            try (OutputStream os = new FileOutputStream(args[1])) {
+                swf.saveTo(os);
+            }
+            System.out.println(
+                    "{\"success\":true,\"patched\":\"experience_binding_batch\","
+                            + "\"entry_count\":" + entryCount + ","
+                            + "\"settlement_branches_patched\":" + worldBranchesPatched + "}"
+            );
+            return;
+        }
         if (args.length != 4) {
             throw new IllegalArgumentException(
                     "Usage: HfeExperienceBindingPatch <in.swf> <out.swf> "

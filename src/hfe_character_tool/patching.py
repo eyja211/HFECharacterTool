@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from hfe_character_tool.afterimage_patch import AfterimageRole, apply_afterimage, encode_config
 from hfe_character_tool.hfworkshop_catalog import (
     limb_name_replacements,
     load_spt_action_options_from_payload,
@@ -508,6 +509,30 @@ def generate_patched_swf(
         exp_result.compile_result,
         exp_result.run_result,
     )
+    result_swf = final_swf
+    afterimage_diagnostics: dict[str, object] = {}
+    if character.afterimage.enabled:
+        afterimage_swf = output_dir / f"{stem}_07_afterimage.swf"
+        afterimage_result = apply_afterimage(
+            final_swf,
+            afterimage_swf,
+            (
+                AfterimageRole(
+                    cid,
+                    character.afterimage.delays,
+                    damage=character.afterimage.damage,
+                    items=character.afterimage.items,
+                ),
+            ),
+            tools,
+            output_dir / "afterimage_compile",
+        )
+        result_swf = afterimage_swf
+        afterimage_diagnostics = {
+            "afterimage_mode": afterimage_result.mode,
+            "afterimage_roles": ",".join(role.role_id for role in afterimage_result.roles),
+            "afterimage_config": encode_config(afterimage_result.roles),
+        }
     diagnostics = dict(
         _binary_patch_diagnostics(
             binary_result.run_result.stdout,
@@ -516,6 +541,7 @@ def generate_patched_swf(
             resource_id,
         )
     )
+    diagnostics.update(afterimage_diagnostics)
     diagnostics["texture_limb_replacements_requested"] = len(replacements)
     metadata_stdout = _parse_json_stdout(metadata_result.run_result.stdout)
     vsselect_stdout = _parse_json_stdout(vsselect_result.run_result.stdout)
@@ -544,7 +570,7 @@ def generate_patched_swf(
             diagnostics[f"vs_{key}"] = vsselect_stdout[key]
     if "bound_character_id" in exp_stdout:
         diagnostics["exp_bound_character_id"] = exp_stdout["bound_character_id"]
-    return PatchedSwfBuildResult(final_swf, diagnostics)
+    return PatchedSwfBuildResult(result_swf, diagnostics)
 
 
 def _binary_patch_diagnostics(

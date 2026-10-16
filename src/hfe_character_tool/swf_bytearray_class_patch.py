@@ -82,6 +82,70 @@ def add_bytearray_asset_classes(
     )
 
 
+def add_bytearray_asset_class_entries(
+    input_swf: Path,
+    output_swf: Path,
+    tools: ToolConfig,
+    cwd: Path,
+    anchor_class: str,
+    entries: tuple[str, ...],
+    output_exe: Path | None = None,
+) -> ByteArrayClassPatchResult:
+    if not entries:
+        raise ValueError("At least one ByteArrayAsset class is required.")
+    source_path = write_bytearray_class_patch_source(output_swf.parent)
+    class_dir = output_swf.parent / "bytearray_class_patch_classes"
+    class_dir.mkdir(exist_ok=True)
+    classpath = _ffdec_classpath(tools)
+    compile_result = run_tool(
+        (
+            "javac",
+            "-encoding",
+            "UTF-8",
+            "-cp",
+            classpath,
+            "-d",
+            str(class_dir),
+            str(source_path),
+        ),
+        cwd,
+    )
+    if not compile_result.success:
+        return ByteArrayClassPatchResult(
+            source_path,
+            class_dir,
+            output_swf,
+            None,
+            compile_result,
+            ToolResult(False, -1, "", "bytearray class patch compile failed"),
+        )
+    run_result = run_tool(
+        (
+            "java",
+            "-cp",
+            f"{class_dir};{classpath}",
+            BYTEARRAY_CLASS_PATCH_CLASS_NAME,
+            str(input_swf),
+            str(output_swf),
+            anchor_class,
+            *entries,
+        ),
+        cwd,
+    )
+    actual_exe = None
+    if run_result.success and output_exe is not None:
+        wrap_with_projector(tools.projector, output_swf, output_exe)
+        actual_exe = output_exe
+    return ByteArrayClassPatchResult(
+        source_path,
+        class_dir,
+        output_swf,
+        actual_exe,
+        compile_result,
+        run_result,
+    )
+
+
 def write_bytearray_class_patch_source(output_dir: Path) -> Path:
     output_dir.mkdir(exist_ok=True)
     path = output_dir / f"{BYTEARRAY_CLASS_PATCH_CLASS_NAME}.java"
@@ -112,10 +176,10 @@ import java.io.OutputStream;
 
 public class HfeByteArrayAssetClassPatch {
     public static void main(String[] args) throws Exception {
-        if (args.length != 5) {
+        if (args.length < 5) {
             throw new IllegalArgumentException(
                     "Usage: HfeByteArrayAssetClassPatch <in.swf> <out.swf> "
-                            + "<anchorClass> <targetSptClass> <targetLmiClass>"
+                            + "<anchorClass> <targetClass> [targetClass...]"
             );
         }
         SWF swf = new SWF(new BufferedInputStream(new FileInputStream(args[0])), false);
@@ -123,8 +187,9 @@ public class HfeByteArrayAssetClassPatch {
         if (target == null) {
             throw new IllegalStateException("Anchor ABC class not found: " + args[2]);
         }
-        addClassIfMissing(swf, target, args[3]);
-        addClassIfMissing(swf, target, args[4]);
+        for (int i = 3; i < args.length; i++) {
+            addClassIfMissing(swf, target, args[i]);
+        }
         target.abc.fireChanged();
         target.tag.setABC(target.abc);
         ((Tag) target.tag).setModified(true);
@@ -135,7 +200,8 @@ public class HfeByteArrayAssetClassPatch {
         System.out.println(
                 "{\"success\":true,\"patched\":\"bytearray_asset_classes\","
                         + "\"target_spt_class\":\"" + jsonEscape(args[3]) + "\","
-                        + "\"target_lmi_class\":\"" + jsonEscape(args[4]) + "\"}"
+                        + "\"target_lmi_class\":\"" + jsonEscape(args[4]) + "\","
+                        + "\"target_class_count\":" + (args.length - 3) + "}"
         );
     }
 

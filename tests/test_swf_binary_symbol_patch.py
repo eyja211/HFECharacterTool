@@ -21,7 +21,6 @@ def test_binary_symbol_patch_source_clones_define_binary_data_and_symbols(
     assert "getNextCharacterId" in source
     assert "ByteArrayRange" in source
     assert "patchCharacterPayload" in source
-    assert "validateResourceId" in source
     assert "readSptContainer" in source
     assert "writeSptContainer" in source
     assert "applyFrameItemEdits" in source
@@ -39,7 +38,9 @@ def test_binary_symbol_patch_source_clones_define_binary_data_and_symbols(
     assert "applyLimbNameReplacements" in source
     assert "applyTextureReplacements" in source
     assert "DONOR_LIMB" in source
-    assert "same byte length as the selected source role" in source
+    assert "sourceLmiPathId" in source
+    assert "validateResourceId" not in source
+    assert "same byte length as the selected source role" not in source
     assert "readAmf3ByteArray" in source
     assert "replaceFirstSptId" in source
     assert "replacePrefixUtfStrings" in source
@@ -55,7 +56,7 @@ def test_binary_symbol_patch_source_clones_define_binary_data_and_symbols(
     assert "detectLimbNames" in source
     assert "sourceSptLimbNames" in source
     assert "sourceLmiLimbNames" in source
-    assert '"lmi_data/" + sourceCharacterId + ".lmi"' in source
+    assert '"lmi_data/" + sourceLmiPathId + ".lmi"' in source
     assert '"lmi_data/" + resourceId + ".lmi"' in source
     assert "source_character_id" in source
     assert "spt_limb_name_replacements" in source
@@ -153,6 +154,25 @@ def test_binary_symbol_patch_aliases_external_lmi_limb_names() -> None:
     assert "sanitizeLimbAliasToken" in source
 
 
+def test_binary_symbol_patch_aliases_lmi_external_name_fields_directly() -> None:
+    source = BINARY_SYMBOL_PATCH_JAVA_SOURCE
+    compact = "".join(source.split())
+
+    assert 'if(!sptPayload)' in compact
+    assert (
+        'replaceNamedUtfStringValue(patched,"name",sourceLimbName,alias,'
+        "stats,ReplacementKind.EXTERNAL_LMI_ALIAS,false)"
+    ) in compact
+
+
+def test_binary_symbol_patch_prefixed_external_lmi_aliases_do_not_keep_source_name() -> None:
+    source = BINARY_SYMBOL_PATCH_JAVA_SOURCE
+    compact = "".join(source.split())
+
+    assert "alternateExternalLmiLimbAlias(" in source
+    assert "if(alias.equals(sourceLimbName)||alias.equalsIgnoreCase(sourceLimbName))" in compact
+
+
 def test_binary_symbol_patch_aliases_bare_lmi_limb_names_narrowly() -> None:
     source = BINARY_SYMBOL_PATCH_JAVA_SOURCE
     compact = "".join(source.split())
@@ -162,7 +182,7 @@ def test_binary_symbol_patch_aliases_bare_lmi_limb_names_narrowly() -> None:
     assert "compactBareLimbAlias" in source
     assert "Bare LMI alias length mismatch" in source
     assert (
-        'replaceNamedUtfStringValue(patched,sptPayload?"limbName":"name",'
+        'replaceNamedUtfStringValue(patched,"limbName",'
         "sourceLimbName,alias,stats,ReplacementKind.EXTERNAL_LMI_ALIAS,false)"
     ) in compact
 

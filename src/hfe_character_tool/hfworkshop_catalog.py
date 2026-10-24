@@ -195,7 +195,7 @@ def load_character_template_catalog(
         }
         symbols.update({f"Data.Global_{role_id}Lmi": True for role_id in role_ids})
     else:
-        symbols = {name: True for name in target_cache.data_global_symbol_names}
+        symbols = dict.fromkeys(target_cache.data_global_symbol_names, True)
     spt_by_role = _role_symbols_by_suffix(symbols, "Spt")
     lmi_by_role = _role_symbols_by_suffix(symbols, "Lmi")
     catalog_role_ids = sorted(

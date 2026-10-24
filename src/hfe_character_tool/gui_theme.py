@@ -213,20 +213,17 @@ def configure_styles(root: tk.Misc) -> None:
     style.configure("TSpinbox", arrowsize=px(11))
 
     for orient in ("Vertical", "Horizontal"):
-        style.layout(
-            f"Thin.{orient}.TScrollbar",
-            [
-                (
-                    f"{orient}.Scrollbar.trough",
-                    {
-                        "sticky": "ns" if orient == "Vertical" else "ew",
-                        "children": [
-                            (f"{orient}.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})
-                        ],
-                    },
-                )
-            ],
-        )
+        # Arrow-less scrollbar: only the trough and the thumb.
+        thin_layout: Any = [
+            (
+                f"{orient}.Scrollbar.trough",
+                {
+                    "sticky": "ns" if orient == "Vertical" else "ew",
+                    "children": [(f"{orient}.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})],
+                },
+            )
+        ]
+        style.layout(f"Thin.{orient}.TScrollbar", thin_layout)
         style.configure(
             f"Thin.{orient}.TScrollbar",
             troughcolor=CARD,

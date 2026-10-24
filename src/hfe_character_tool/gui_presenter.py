@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path, PureWindowsPath
 from typing import Mapping
 
 from hfe_character_tool.hfworkshop_catalog import (
@@ -12,6 +13,7 @@ from hfe_character_tool.hfworkshop_catalog import (
 from hfe_character_tool.models import (
     AFTERIMAGE_MAX_DELAY,
     DEFAULT_ITEM_FRAME_EDIT,
+    DEFAULT_TARGET_GAME,
     CharacterProject,
     ExportResult,
     FrameItemEdit,
@@ -24,6 +26,7 @@ from hfe_character_tool.models import (
     ValidationReport,
     replace_project,
 )
+from hfe_character_tool.validation import CHARACTER_ID_PATTERN, OCCUPIED_IDS
 
 DEFAULT_PROJECT_NAME = "Eyja"
 DEFAULT_CHARACTER_ID = "eyja0"
@@ -401,6 +404,159 @@ def afterimage_summary(delays: tuple[int, ...]) -> str:
     if not delays:
         return "当前没有残影。"
     return f"当前 {len(delays)} 个残影：延迟 " + "、".join(str(d) for d in delays) + " 帧。"
+
+
+def compress_delays(delays: tuple[int, ...]) -> str:
+    """1,2,3,5,30 -> "1–3、5、30"."""
+    ordered = sorted(set(delays))
+    parts: list[str] = []
+    index = 0
+    while index < len(ordered):
+        end = index
+        while end + 1 < len(ordered) and ordered[end + 1] == ordered[end] + 1:
+            end += 1
+        if end - index >= 2:
+            parts.append(f"{ordered[index]}–{ordered[end]}")
+        else:
+            parts.extend(str(value) for value in ordered[index : end + 1])
+        index = end + 1
+    return "、".join(parts)
+
+
+def quick_add_preview(raw_count: str, raw_start: str, raw_step: str) -> str:
+    try:
+        delays = quick_add_afterimage_delays((), raw_count, raw_start, raw_step)
+    except ValueError as exc:
+        return str(exc)
+    return f"将添加延迟 {compress_delays(delays)} 帧的 {len(delays)} 个残影。"
+
+
+@dataclass(frozen=True)
+class ProjectListRow:
+    path: Path
+    title: str
+    subtitle: str
+    status_kind: str
+    search_text: str
+
+
+def export_status_display(status: str) -> tuple[str, str]:
+    """Return (label, kind) for a stored export status; kind drives the color."""
+    if status.startswith("success"):
+        return "已导出", "success"
+    if status == "blocked":
+        return "导出被阻断", "warning"
+    if status == "failed":
+        return "导出失败", "danger"
+    if status in ("", "未导出"):
+        return "未导出", "neutral"
+    return status, "neutral"
+
+
+def project_list_rows(
+    summaries: tuple[ProjectSummary, ...], query: str = ""
+) -> tuple[ProjectListRow, ...]:
+    """Most recently modified first; `query` matches name, ID or display name."""
+    needle = query.strip().lower()
+    rows: list[ProjectListRow] = []
+    ordered = sorted(summaries, key=lambda summary: summary.project_name.lower())
+    ordered.sort(key=lambda summary: summary.updated_at, reverse=True)
+    for summary in ordered:
+        search_text = " ".join(
+            (summary.project_name, summary.character_id, summary.character_name)
+        ).lower()
+        if needle and needle not in search_text:
+            continue
+        status_label, kind = export_status_display(summary.last_export_status)
+        rows.append(
+            ProjectListRow(
+                path=summary.path,
+                title=summary.project_name,
+                subtitle=f"{summary.character_id} · {status_label}",
+                status_kind=kind,
+                search_text=search_text,
+            )
+        )
+    return tuple(rows)
+
+
+def target_display_name(target: TargetGame) -> str:
+    if target.source_path == DEFAULT_TARGET_GAME.source_path:
+        return f"{DEFAULT_TARGET_GAME.detected_version}（内置原版）"
+    name = PureWindowsPath(target.source_path).name or target.source_path
+    if target.detected_version and target.detected_version not in name:
+        return f"{name}（{target.detected_version}）"
+    return name
+
+
+def character_id_hint(source_role_id: str) -> str:
+    role = source_role_id or "lucas"
+    length = len(role.encode("utf-8"))
+    return f"小写字母开头，只用小写字母、数字、下划线；需要 {length} 个字符（与模板 {role} 等长）。"
+
+
+def character_id_problem(character_id: str, source_role_id: str) -> str:
+    """The first blocking problem with a new character ID, or "" when it is usable."""
+    value = character_id.strip()
+    role = source_role_id or "lucas"
+    if not value:
+        return "请填写角色 ID。"
+    if not CHARACTER_ID_PATTERN.fullmatch(value):
+        return "只能用小写字母开头，并且只包含小写字母、数字和下划线。"
+    if value in OCCUPIED_IDS or value == role:
+        return "与原版角色重复，请换一个。"
+    wanted = len(role.encode("utf-8"))
+    if len(value.encode("utf-8")) != wanted:
+        return f"需要 {wanted} 个字符（与模板 {role} 等长），现在是 {len(value)} 个。"
+    return ""
+
+
+def validation_counts(report: ValidationReport) -> tuple[int, int, int]:
+    return (
+        len(report.by_severity(Severity.ERROR)),
+        len(report.by_severity(Severity.WARNING)),
+        len(report.by_severity(Severity.INFO)),
+    )
+
+
+def validation_chip(report: ValidationReport) -> tuple[str, str]:
+    """Short status-bar text and kind for an editing report."""
+    errors, warnings, _infos = validation_counts(report)
+    if errors:
+        return f"{errors} 个错误", "danger"
+    if warnings:
+        return f"{warnings} 个警告", "warning"
+    return "校验通过", "success"
+
+
+def frame_edit_label(
+    action_name: str, action_frame: int, slot_count: int, description: str = ""
+) -> str:
+    return f"{description or action_name} 第 {action_frame} 帧 · {slot_count} 个道具"
+
+
+def action_row_text(action_name: str, description: str, edited: bool) -> str:
+    mark = "● " if edited else "   "
+    return f"{mark}{description}  ·  {action_name}" if description else f"{mark}{action_name}"
+
+
+def suggest_character_id(base: str, used: set[str]) -> str:
+    """Same length as `base` (templates need a fixed ID length); trailing digits change."""
+    stem = base.rstrip("0123456789")
+    width = len(base) - len(stem)
+    start = int(base[len(stem) :]) + 1 if width else 1
+    if width == 0:
+        stem, width = base[:-1], 1
+    for number in (*range(start, 10**width), *range(1, start)):
+        candidate = f"{stem}{number:0{width}d}"
+        if candidate != base and candidate not in used:
+            return candidate
+    return base
+
+
+def format_elapsed(seconds: float) -> str:
+    total = max(int(seconds), 0)
+    return f"{total // 60:02d}:{total % 60:02d}"
 
 
 def _parse_afterimage_number(raw: str, label: str) -> int:

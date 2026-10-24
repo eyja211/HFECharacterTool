@@ -926,7 +926,40 @@ def _discover_lmi_role_ids(exe_path: Path) -> tuple[str, ...]:
     return tuple(role_ids) or ("lucas",)
 
 
+_ROLE_LIMB_NAME_CACHE: dict[tuple[str, int, int], dict[str, tuple[str, ...]]] = {}
+
+
+def _limb_cache_key(exe_path: Path) -> tuple[str, int, int] | None:
+    try:
+        stat = exe_path.stat()
+    except OSError:
+        return None
+    return (str(exe_path.resolve()), stat.st_size, stat.st_mtime_ns)
+
+
+def role_limb_names_ready(workspace: Path) -> bool:
+    """True once the limb-name catalog is parsed, so texture checks are instant."""
+    key = _limb_cache_key(resource_path(workspace, ORIGINAL_GAME_RELATIVE))
+    return key is not None and key in _ROLE_LIMB_NAME_CACHE
+
+
+def warm_role_limb_names(workspace: Path) -> None:
+    _load_role_limb_names(resource_path(workspace, ORIGINAL_GAME_RELATIVE))
+
+
 def _load_role_limb_names(exe_path: Path) -> dict[str, tuple[str, ...]]:
+    # Parsing the projector EXE takes seconds; the result only changes with the file.
+    key = _limb_cache_key(exe_path)
+    if key is None:
+        return {}
+    cached = _ROLE_LIMB_NAME_CACHE.get(key)
+    if cached is None:
+        cached = _parse_role_limb_names(exe_path)
+        _ROLE_LIMB_NAME_CACHE[key] = cached
+    return cached
+
+
+def _parse_role_limb_names(exe_path: Path) -> dict[str, tuple[str, ...]]:
     if not exe_path.is_file():
         return {}
     try:

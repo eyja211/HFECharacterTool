@@ -41,6 +41,11 @@ ignore_errors = true
 module = ["hfe_character_tool.afterimage_patch", "test_afterimage_patch", "afterimage_vm"]
 disallow_untyped_calls = false
 
+# Pillow is optional at runtime (the GUI falls back to flat colors without it).
+[[tool.mypy.overrides]]
+module = ["PIL", "PIL.*"]
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py38"

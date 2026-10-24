@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from hfe_character_tool.models import (
@@ -81,6 +82,48 @@ def save_project(project_dir: Path, project: CharacterProject) -> None:
             file.write("\n")
     except OSError as exc:
         raise ProjectError("保存项目文件失败。", f"{path}: {exc}") from exc
+
+
+TRASH_DIR_NAME = "_已删除"
+
+
+def duplicate_project(
+    root: Path, source_dir: Path, project_name: str, character_id: str
+) -> Path:
+    """Copy a project under a new name and ID; export history is not copied."""
+    target = root / project_name
+    if target.exists():
+        raise ProjectError("项目文件夹已存在。", str(target))
+    source = load_project(source_dir)
+    target.mkdir(parents=True)
+    for child in PROJECT_DIRS:
+        if child != "exports" and (source_dir / child).is_dir():
+            shutil.copytree(source_dir / child, target / child)
+        else:
+            (target / child).mkdir()
+    timestamp = now_iso()
+    save_project(
+        target,
+        replace_project(
+            source,
+            project_name=project_name,
+            character_id=character_id,
+            exports=(),
+            created_at=timestamp,
+            updated_at=timestamp,
+        ),
+    )
+    return target
+
+
+def move_project_to_trash(root: Path, project_dir: Path) -> Path:
+    """Deleting only moves the folder to projects/_已删除, so it can be restored by hand."""
+    trash = root / TRASH_DIR_NAME
+    trash.mkdir(parents=True, exist_ok=True)
+    stamp = now_iso().replace(":", "").replace("-", "")
+    destination = trash / f"{project_dir.name}_{stamp}"
+    shutil.move(str(project_dir), str(destination))
+    return destination
 
 
 def check_project_structure(project_dir: Path) -> list[str]:

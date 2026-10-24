@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from hfe_character_tool.hfworkshop_catalog import (
+    SptActionInfo,
     limb_name_length_issues,
     limb_name_replacements,
     load_item_catalog,
@@ -175,6 +176,7 @@ def _validate(
                 project.character_id,
             )
         )
+    issues.extend(_validate_game_text(project))
     if not project.character_name.strip():
         issues.append(
             ValidationIssue(
@@ -521,6 +523,90 @@ def _validate_target_cache(target_cache: TargetCacheEntry) -> list[ValidationIss
     return issues
 
 
+GAME_TEXT_CODEC = "cp950"
+
+
+def non_game_text_characters(text: str) -> str:
+    """Characters the game cannot show: names are written as Big5 (cp950) text."""
+    bad: list[str] = []
+    for char in text.strip():
+        try:
+            char.encode(GAME_TEXT_CODEC)
+        except UnicodeEncodeError:
+            if char not in bad:
+                bad.append(char)
+    return "".join(bad)
+
+
+def _validate_game_text(project: CharacterProject) -> list[ValidationIssue]:
+    # Mirrors patching._game_safe_text: a field that does not encode falls back silently.
+    issues: list[ValidationIssue] = []
+    for target, label, value, fallback in (
+        ("character.name", "英文名", project.character_name, "角色 ID"),
+        ("character.name_zh", "中文名", project.character_name_zh, "英文名"),
+        ("character.description", "角色说明", project.description, "英文名"),
+    ):
+        bad = non_game_text_characters(value)
+        if bad:
+            issues.append(
+                ValidationIssue(
+                    Severity.WARNING,
+                    f"{label}里有游戏显示不了的字：{bad}",
+                    f"游戏用繁体中文（Big5）显示文字，这些字没有繁体编码，"
+                    f"导出时{label}会整个改用{fallback}。请换成繁体字或去掉这些字。",
+                    target,
+                    bad,
+                )
+            )
+    return issues
+
+
+def validate_against_target(
+    project: CharacterProject,
+    target_cache: TargetCacheEntry,
+    actions: tuple[SptActionInfo, ...],
+    item_action_groups: frozenset[int] | None,
+) -> tuple[ValidationIssue, ...]:
+    """Target-specific export checks that need no extraction: the caller already has the
+    target cache and its catalogs. `item_action_groups` is None when the item catalog is
+    unavailable (the export check reports that case itself)."""
+    issues: list[ValidationIssue] = []
+    issues.extend(_validate_source_role(project.source_role_id, target_cache))
+    issues.extend(_validate_character_id_available(project.character_id, target_cache))
+    for edit_index, edit in enumerate(project.item_frame_edits):
+        target = f"item_frame_edits.{edit_index}"
+        if actions:
+            try:
+                resolve_action_frame_index_from_options(
+                    actions, edit.action_name, edit.action_frame
+                )
+            except ValueError as exc:
+                issues.append(
+                    ValidationIssue(
+                        Severity.ERROR,
+                        f"{edit.action_name} 第 {edit.action_frame} 帧在当前模板里不存在。",
+                        "换了目标游戏或模板后动作可能变了，请在技能道具页重新选择。",
+                        f"{target}.action_frame",
+                        str(exc),
+                    )
+                )
+        if item_action_groups is None:
+            continue
+        for slot_index, slot in enumerate(s for s in edit.slots if s.enabled):
+            if slot.item_action_group not in item_action_groups:
+                issues.append(
+                    ValidationIssue(
+                        Severity.ERROR,
+                        f"{edit.action_name} 第 {edit.action_frame} 帧的道具 "
+                        f"{slot.item_action_group} 在当前目标游戏里不存在。",
+                        "不同版本的道具目录不一样，请从道具列表里重新选择。",
+                        f"{target}.slots.{slot_index}.item_action_group",
+                        str(slot.item_action_group),
+                    )
+                )
+    return tuple(issues)
+
+
 def _validate_source_role(
     source_role_id: str,
     target_cache: TargetCacheEntry,
@@ -582,8 +668,8 @@ def _validate_character_id_available(
     return [
         ValidationIssue(
             Severity.ERROR,
-            "Character ID already exists in the target game.",
-            "Use a new unused ID before exporting again.",
+            "目标游戏里已经有这个角色 ID 了。",
+            "换一个没用过的 ID。往同一个游戏里继续加角色时，每个角色都要用不同的 ID。",
             "character.id",
             f"{character_id}: {', '.join(dict.fromkeys(occupied_locations))}",
         )

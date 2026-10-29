@@ -254,6 +254,8 @@ class CanvasButton:
         self._command = command
         self._kind = kind
         self._box = (0.0, 0.0, 0.0, 0.0)
+        self._shape: int | None = None
+        self._label: int | None = None
         self._hover = False
         self._enabled = True
         self._font = tkfont.Font(
@@ -264,41 +266,57 @@ class CanvasButton:
         canvas.tag_bind(tag, "<Button-1>", lambda _event: self._click())
 
     def place(self, x1: float, y1: float, x2: float, y2: float) -> None:
+        if (x1, y1, x2, y2) == self._box and self._shape is not None:
+            return
         self._box = (x1, y1, x2, y2)
         self._redraw()
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
-        self._redraw()
+        self._restyle()
 
     def _set_hover(self, hover: bool) -> None:
+        if hover == self._hover:
+            return
         self._hover = hover
         self._canvas.configure(cursor="hand2" if hover and self._enabled else "")
-        self._redraw()
+        self._restyle()
 
     def _click(self) -> None:
         if self._enabled:
             self._command()
 
+    def _colors(self) -> tuple[str, str, str]:
+        if not self._enabled:
+            return "#ece8f3", "#e3ddee", theme.TEXT_DISABLED
+        if self._kind == "accent":
+            fill = theme.ACCENT_HOVER if self._hover else theme.ACCENT
+            return fill, fill, "#ffffff"
+        if self._hover:
+            return "#ffffff", theme.ACCENT_SOFT_2, theme.ACCENT_TEXT
+        return "#fbf9fe", "#e6def2", theme.TEXT
+
+    def _restyle(self) -> None:
+        # Hover only recolours the existing items: deleting and recreating the item under the
+        # pointer fires <Leave>/<Enter> again, which loops forever and freezes the window.
+        if self._shape is None or self._label is None:
+            return
+        fill, outline, color = self._colors()
+        self._canvas.itemconfigure(self._shape, fill=fill, outline=outline)
+        self._canvas.itemconfigure(self._label, fill=color)
+
     def _redraw(self) -> None:
         canvas = self._canvas
         canvas.delete(self._tag)
+        self._shape = self._label = None
         x1, y1, x2, y2 = self._box
         if x2 <= x1:
             return
-        if self._kind == "accent":
-            fill = theme.ACCENT_HOVER if self._hover else theme.ACCENT
-            outline, color = fill, "#ffffff"
-        else:
-            fill = "#ffffff" if self._hover else "#fbf9fe"
-            outline = theme.ACCENT_SOFT_2 if self._hover else "#e6def2"
-            color = theme.ACCENT_TEXT if self._hover else theme.TEXT
-        if not self._enabled:
-            fill, outline, color = "#ece8f3", "#e3ddee", theme.TEXT_DISABLED
-        theme.rounded_rect(
+        fill, outline, color = self._colors()
+        self._shape = theme.rounded_rect(
             canvas, x1, y1, x2, y2, theme.px(11), fill=fill, outline=outline, tags=(self._tag,)
         )
-        canvas.create_text(
+        self._label = canvas.create_text(
             (x1 + x2) / 2,
             (y1 + y2) / 2,
             text=self._text,

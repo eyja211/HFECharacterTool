@@ -38,7 +38,13 @@ ignore_errors = true
 
 # These call into the untyped vendored helpers above.
 [[tool.mypy.overrides]]
-module = ["hfe_character_tool.afterimage_patch", "test_afterimage_patch", "afterimage_vm"]
+module = [
+    "hfe_character_tool.afterimage_patch",
+    "hfe_character_tool.donor_textures",
+    "test_afterimage_patch",
+    "test_donor_textures",
+    "afterimage_vm",
+]
 disallow_untyped_calls = false
 
 # Pillow is optional at runtime (the GUI falls back to flat colors without it).

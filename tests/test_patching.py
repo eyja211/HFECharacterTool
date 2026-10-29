@@ -7,6 +7,7 @@ from typing import Callable
 
 import pytest
 
+from hfe_character_tool.donor_textures import DonorTextureResult
 from hfe_character_tool.models import AssetEntry, InternalCharacter, replace_project
 from hfe_character_tool.patching import (
     NEW_CHARACTER_INDEX,
@@ -136,7 +137,6 @@ def test_build_hfe_artifacts_real_patching_runs_verified_stage_order(
     original_game.parent.mkdir(parents=True)
     original_game.write_bytes(b"PROJECTOR")
     calls: list[str] = []
-    texture_replacements = {"Lucas_00Head": "raye_00Head"}
 
     def fake_extract_projector_swf(exe_path: Path, swf_path: Path) -> None:
         calls.append("extract")
@@ -151,7 +151,8 @@ def test_build_hfe_artifacts_real_patching_runs_verified_stage_order(
             output_swf.write_bytes(f"FWS{name}".encode("ascii"))
             if name == "binary":
                 assert kwargs["target_character_id"] == "codex"
-                assert kwargs["texture_replacements"] == texture_replacements
+                # Donor art no longer renames SPT limbs; the textures stage swaps LMI slots.
+                assert kwargs["texture_replacements"] == {}
                 assert kwargs["source_character_id"] == "lucas"
             if name == "metadata":
                 assert kwargs["character_index"] == NEW_CHARACTER_INDEX
@@ -190,10 +191,7 @@ def test_build_hfe_artifacts_real_patching_runs_verified_stage_order(
     monkeypatch.setattr(
         "hfe_character_tool.patching.extract_projector_swf", fake_extract_projector_swf
     )
-    monkeypatch.setattr(
-        "hfe_character_tool.patching.limb_name_replacements",
-        lambda *_args: texture_replacements,
-    )
+    monkeypatch.setattr("hfe_character_tool.patching.apply_donor_textures", _fake_textures(calls))
     monkeypatch.setattr(
         "hfe_character_tool.patching._extract_source_spt_payload",
         lambda output_dir, *_args: _empty_payload(output_dir),
@@ -230,6 +228,7 @@ def test_build_hfe_artifacts_real_patching_runs_verified_stage_order(
     assert calls == [
         "extract",
         "binary",
+        "textures",
         "abc",
         "registry",
         "loader",
@@ -302,7 +301,7 @@ def test_build_hfe_artifacts_uses_source_metadata_for_non_lucas_templates(
     monkeypatch.setattr(
         "hfe_character_tool.patching.extract_projector_swf", fake_extract_projector_swf
     )
-    monkeypatch.setattr("hfe_character_tool.patching.limb_name_replacements", lambda *_args: {})
+    monkeypatch.setattr("hfe_character_tool.patching.apply_donor_textures", _fake_textures(calls))
     monkeypatch.setattr(
         "hfe_character_tool.patching._extract_source_spt_payload",
         lambda output_dir, *_args: _empty_payload(output_dir),
@@ -340,6 +339,7 @@ def test_build_hfe_artifacts_uses_source_metadata_for_non_lucas_templates(
     assert calls == [
         "extract",
         "binary",
+        "textures",
         "abc",
         "registry",
         "loader",
@@ -396,7 +396,7 @@ def test_build_hfe_artifacts_uses_hidden_list_metadata_for_spt_only_templates(
     monkeypatch.setattr(
         "hfe_character_tool.patching.extract_projector_swf", fake_extract_projector_swf
     )
-    monkeypatch.setattr("hfe_character_tool.patching.limb_name_replacements", lambda *_args: {})
+    monkeypatch.setattr("hfe_character_tool.patching.apply_donor_textures", _fake_textures(calls))
     monkeypatch.setattr(
         "hfe_character_tool.patching._extract_source_spt_payload",
         lambda output_dir, *_args: _empty_payload(output_dir),
@@ -434,6 +434,7 @@ def test_build_hfe_artifacts_uses_hidden_list_metadata_for_spt_only_templates(
     assert calls == [
         "extract",
         "binary",
+        "textures",
         "abc",
         "registry",
         "loader",
@@ -536,6 +537,15 @@ def _internal_character(
         )
         save_project(projects_root / "plan_hero", project)
     return to_internal_character(project)
+
+
+def _fake_textures(calls: list[str]) -> Callable[..., DonorTextureResult]:
+    def stage(input_swf: Path, output_swf: Path, *_args: object) -> DonorTextureResult:
+        calls.append("textures")
+        output_swf.write_bytes(input_swf.read_bytes())
+        return DonorTextureResult(output_swf, (), (), (), 0)
+
+    return stage
 
 
 def _success_stage_result(stdout: str = "") -> SimpleNamespace:

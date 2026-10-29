@@ -4,16 +4,11 @@ import json
 import struct
 from pathlib import Path
 
-import pytest
-
 from hfe_character_tool.hfworkshop_catalog import (
     KEEP_SOURCE_TEXTURE_ROLE_ID,
     TexturePart,
     TextureRole,
-    _best_donor_limb,
     _limb_suffix,
-    limb_name_length_issues,
-    limb_name_replacements,
     load_character_template_catalog,
     load_item_catalog,
     load_item_options,
@@ -97,165 +92,10 @@ def test_texture_role_selections_allow_lucas_for_non_lucas_source() -> None:
     assert selections == {"chest": "lucas"}
 
 
-def test_limb_name_matching_prefers_same_byte_length_candidate() -> None:
-    target = _best_donor_limb(
-        "Lucas_17UpperLeg",
-        ("iczzy_17UpperLegRight", "iczzy_14UpperLeg"),
-    )
-
-    assert target == "iczzy_14UpperLeg"
-
-
-def test_limb_name_matching_prefers_selected_role_prefix() -> None:
-    target = _best_donor_limb(
-        "Iceman_05UpperArm",
-        ("jason_05UpperArm", "rudolf_05UpperArm"),
-        preferred_role_id="jason",
-    )
-
-    assert target == "jason_05UpperArm"
-
-
 def test_limb_name_matching_handles_role_ids_with_underscores() -> None:
     assert _limb_suffix("z_woman01_06LowerArm") == "06LowerArm"
     assert _limb_suffix("z_villager_03HipsA") == "03HipsA"
     assert _limb_suffix("Lucas_00Head_hfx") == "00Head_hfx"
-
-
-def test_limb_name_replacements_hides_head_variants_without_donor_match(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "hfe_character_tool.hfworkshop_catalog._load_role_limb_names",
-        lambda _path: {
-            "lucas": ("Lucas_00Head", "Lucas_00Head_hfx"),
-            "gordon": ("Gordon_00Head",),
-        },
-    )
-    parts = (TexturePart("head", "head", ()),)
-    roles = (
-        TextureRole(KEEP_SOURCE_TEXTURE_ROLE_ID, "keep"),
-        TextureRole("lucas", "Lucas"),
-        TextureRole("gordon", "Gordon"),
-    )
-
-    replacements = limb_name_replacements(
-        tmp_path,
-        {"head": "gordon"},
-        parts,
-        roles,
-        source_role_id="lucas",
-    )
-
-    assert replacements == {
-        "Lucas_00Head": "Gordon_00Head",
-        "Lucas_00Head_hfx": "",
-    }
-
-
-def test_limb_name_replacements_maps_head_variants_when_donor_has_match(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "hfe_character_tool.hfworkshop_catalog._load_role_limb_names",
-        lambda _path: {
-            "lucas": ("Lucas_00Head", "Lucas_00Head_hfx"),
-            "taylor": ("taylor_00Head", "taylor_00Head_hfx"),
-        },
-    )
-    parts = (TexturePart("head", "head", ()),)
-    roles = (
-        TextureRole(KEEP_SOURCE_TEXTURE_ROLE_ID, "keep"),
-        TextureRole("lucas", "Lucas"),
-        TextureRole("taylor", "Taylor"),
-    )
-
-    replacements = limb_name_replacements(
-        tmp_path,
-        {"head": "taylor"},
-        parts,
-        roles,
-        source_role_id="lucas",
-    )
-
-    assert replacements == {
-        "Lucas_00Head": "taylor_00Head",
-        "Lucas_00Head_hfx": "taylor_00Head_hfx",
-    }
-
-
-def test_limb_name_replacements_follow_selected_source_role(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "hfe_character_tool.hfworkshop_catalog._load_role_limb_names",
-        lambda _path: {
-            "z_iceman": (
-                "Iceman_00Head",
-                "Iceman_00HeadA",
-                "Iceman_01Chest",
-                "Iceman_12RightFist",
-                "Iceman_14UpperLeg",
-                "Iceman_16Foot",
-            ),
-            "lucas": (
-                "Lucas_01Chest",
-                "Lucas_12RightFist",
-                "Lucas_14UpperLeg",
-            ),
-            "drew": ("Drew_00Head",),
-            "legge": ("legge_15Foot",),
-        },
-    )
-    parts = (
-        TexturePart("chest", "body", ()),
-        TexturePart("fist_right", "right fist", ()),
-        TexturePart("leg_upper", "upper leg", ()),
-        TexturePart("head", "头部", ()),
-        TexturePart("foot", "脚", ()),
-    )
-    roles = (
-        TextureRole(KEEP_SOURCE_TEXTURE_ROLE_ID, "keep"),
-        TextureRole("lucas", "Lucas"),
-        TextureRole("drew", "Drew"),
-        TextureRole("legge", "Legge"),
-    )
-
-    replacements = limb_name_replacements(
-        tmp_path,
-        {
-            "head": "drew",
-            "chest": "lucas",
-            "fist_right": "lucas",
-            "leg_upper": "lucas",
-            "foot": "legge",
-        },
-        parts,
-        roles,
-        source_role_id="z_iceman",
-    )
-
-    assert replacements == {
-        "Iceman_00Head": "Drew_00Head",
-        "Iceman_00HeadA": "Drew_00Head",
-        "Iceman_01Chest": "Lucas_01Chest",
-        "Iceman_12RightFist": "Lucas_12RightFist",
-        "Iceman_14UpperLeg": "Lucas_14UpperLeg",
-        "Iceman_16Foot": "legge_15Foot",
-    }
-
-
-def test_limb_name_length_issues_report_unsafe_replacements() -> None:
-    issues = limb_name_length_issues(
-        {
-            "Lucas_00Head": "Jenny_00Head",
-            "Lucas_01Chest": "Drew_01Chest",
-        }
-    )
-
-    assert [(issue.source_limb, issue.target_limb) for issue in issues] == [
-        ("Lucas_01Chest", "Drew_01Chest")
-    ]
 
 
 def test_item_catalog_reads_safe_action_groups(tmp_path: Path) -> None:

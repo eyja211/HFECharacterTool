@@ -19,6 +19,7 @@ vendor/
     playerglobal.swc
   original_game/
     HFE v1.0.2.exe
+    HF-EX V 0.2.5.exe
 ```
 
 The GUI and export pipeline discover these paths automatically.

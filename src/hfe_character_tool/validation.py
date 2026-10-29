@@ -3,14 +3,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from hfe_character_tool.donor_textures import texture_parts_without_donor
 from hfe_character_tool.hfworkshop_catalog import (
+    DONOR_ART_RELATIVE,
+    KEEP_SOURCE_TEXTURE_ROLE_ID,
     SptActionInfo,
-    limb_name_length_issues,
-    limb_name_replacements,
     load_item_catalog,
     load_spt_action_options,
     load_texture_parts,
-    load_texture_roles,
     resolve_action_frame_index_from_options,
 )
 from hfe_character_tool.models import (
@@ -21,6 +21,7 @@ from hfe_character_tool.models import (
     ValidationReport,
 )
 from hfe_character_tool.projects import check_project_structure
+from hfe_character_tool.runtime import resource_path
 from hfe_character_tool.target_cache import (
     TargetCacheEntry,
     TargetCacheError,
@@ -372,32 +373,38 @@ def _validate(
 
     if full and project_dir is not None and project.texture_selections:
         workspace = _workspace_for_project_dir(project_dir)
-        unsafe_limb_names = limb_name_length_issues(
-            limb_name_replacements(
+        parts = load_texture_parts(workspace)
+        donor_art = resource_path(workspace, DONOR_ART_RELATIVE)
+        if not donor_art.is_file():
+            unchanged = {KEEP_SOURCE_TEXTURE_ROLE_ID, project.source_role_id or "lucas"}
+            if any(role not in unchanged for role in project.texture_selections.values()):
+                issues.append(
+                    ValidationIssue(
+                        Severity.ERROR,
+                        "换部位贴图需要内置的 HF-EX 0.2.5，但没有找到这个文件。",
+                        "请把 HF-EX V 0.2.5.exe 放到 vendor/original_game/，或把贴图改回模板原样。",
+                        "textures",
+                        str(donor_art),
+                    )
+                )
+        else:
+            missing = texture_parts_without_donor(
                 workspace,
                 project.texture_selections,
-                load_texture_parts(workspace),
-                load_texture_roles(workspace),
+                parts,
                 project.source_role_id or "lucas",
             )
-        )
-        if unsafe_limb_names:
-            sample = unsafe_limb_names[0]
-            issues.append(
-                ValidationIssue(
-                    Severity.WARNING,
-                    "贴图替换会改变 limbName 字节长度，导出会继续，但游戏内可能错位。",
-                    (
-                        "已允许导出，请在游戏内验证身体部位对齐情况；"
-                        "精确 uz 偏移微调属于后续功能。"
-                    ),
-                    "textures",
-                    (
-                        f"{sample.source_limb}({sample.source_length}) -> "
-                        f"{sample.target_limb}({sample.target_length})"
-                    ),
+            if missing:
+                labels = {part.part_id: part.label for part in parts}
+                issues.append(
+                    ValidationIssue(
+                        Severity.WARNING,
+                        "有部位选的来源角色没有对应部件，这些部位会保持模板原样。",
+                        "导出会继续；想换掉这些部位，请换一个有该部件的来源角色。",
+                        "textures",
+                        "、".join(labels.get(part_id, part_id) for part_id in missing),
+                    )
                 )
-            )
 
     asset_names = {asset.file_name for asset in project.assets}
     for required in template.required_assets:

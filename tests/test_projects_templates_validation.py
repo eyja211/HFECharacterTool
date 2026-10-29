@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hfe_character_tool.hfworkshop_catalog import TexturePart, TextureRole
+from hfe_character_tool.hfworkshop_catalog import TexturePart
 from hfe_character_tool.models import (
     AssetEntry,
     FrameItemEdit,
@@ -336,13 +336,16 @@ def test_export_validation_allows_item_slot_count_changes(tmp_path: Path) -> Non
     assert not any(issue.target == "item_frame_edits.0.slots" for issue in report.issues)
 
 
-def test_export_validation_warns_on_texture_limb_name_length_changes(
+def test_export_validation_warns_when_texture_donor_lacks_a_part(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_default_target(tmp_path)
     projects_root = tmp_path / "projects"
     create_project(projects_root, "hero_texture", "lucas-basic", "eyja0")
     project_dir = projects_root / "hero_texture"
+    hfex = tmp_path / "vendor" / "original_game" / "HF-EX V 0.2.5.exe"
+    hfex.parent.mkdir(parents=True, exist_ok=True)
+    hfex.write_bytes(b"placeholder")
     project = replace_project(
         load_project(project_dir),
         texture_selections={"head": "raye"},
@@ -352,12 +355,8 @@ def test_export_validation_warns_on_texture_limb_name_length_changes(
         lambda _workspace: (TexturePart("head", "head", ()),),
     )
     monkeypatch.setattr(
-        "hfe_character_tool.validation.load_texture_roles",
-        lambda _workspace: (TextureRole("lucas", "Lucas"), TextureRole("raye", "Raye")),
-    )
-    monkeypatch.setattr(
-        "hfe_character_tool.validation.limb_name_replacements",
-        lambda *_args: {"Lucas_00Head": "raye_00Head"},
+        "hfe_character_tool.validation.texture_parts_without_donor",
+        lambda *_args: ("head",),
     )
 
     report = validate_for_export(project_dir, project)
@@ -365,6 +364,28 @@ def test_export_validation_warns_on_texture_limb_name_length_changes(
     assert can_export(report)
     assert any(
         issue.target == "textures" and issue.severity is Severity.WARNING
+        for issue in report.issues
+    )
+
+
+def test_export_validation_blocks_texture_swaps_without_hfex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_default_target(tmp_path)
+    projects_root = tmp_path / "projects"
+    create_project(projects_root, "hero_no_hfex", "lucas-basic", "eyja0")
+    project_dir = projects_root / "hero_no_hfex"
+    project = replace_project(load_project(project_dir), texture_selections={"head": "raye"})
+    monkeypatch.setattr(
+        "hfe_character_tool.validation.resource_path",
+        lambda workspace, relative: tmp_path / "missing" / relative,
+    )
+
+    report = validate_for_export(project_dir, project)
+
+    assert not can_export(report)
+    assert any(
+        issue.target == "textures" and issue.severity is Severity.ERROR
         for issue in report.issues
     )
 

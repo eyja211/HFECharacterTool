@@ -20,7 +20,8 @@ local player projects, or exported game files.
 - Edit character ID, name, Chinese name, description, HP, MP, defense, and
   other core properties.
 - Configure item spawning by character action and frame.
-- Choose texture sources for character parts.
+- Choose texture sources for character parts (taken from HF-EX 0.2.5, whose roles are
+  re-cut to Lucas's skeleton, so swaps line up on HFE and other targets too).
 - Validate before export and block clearly incompatible configurations.
 - Add characters to targets that have already been modified.
 - Generate randomized character attributes, texture combinations, and item-frame
@@ -28,7 +29,7 @@ local player projects, or exported game files.
 - Add afterimages that replay a character's actions after a set number of frames,
   with separate switches for whether they deal damage and whether they re-fire items.
 - Show Chinese move names next to raw action names (the character is recognised from the template's actual moves) and search actions in Chinese.
-- Live validation while editing: character ID already used in the target game, items or actions missing from the target build, Chinese names the game cannot display (it renders text as Traditional Chinese Big5), and texture swaps that may misalign.
+- Live validation while editing: character ID already used in the target game, items or actions missing from the target build, Chinese names the game cannot display (it renders text as Traditional Chinese Big5), and texture sources that have no limb for a part.
 - Continue adding characters to a freshly exported game in one click; duplicate projects or move them to `projects/_已删除`.
 
 ## Interface Preview
@@ -91,6 +92,7 @@ vendor/
     playerglobal.swc
   original_game/
     HFE v1.0.2.exe
+    HF-EX V 0.2.5.exe
 ```
 
 Java/JDK can be installed on the system PATH or placed in one of these nearby

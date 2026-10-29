@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from hfe_character_tool.tools import (
     ToolConfig,
@@ -109,6 +111,18 @@ def test_run_tool_missing_command_returns_diagnostic(tmp_path: Path) -> None:
     assert not result.success
     assert result.returncode == -1
     assert result.stderr
+
+
+def test_run_tool_never_opens_a_console_window(tmp_path: Path, monkeypatch: Any) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_run(command: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert run_tool(("tool.exe",), tmp_path).success
+    assert seen["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def test_ffdec_and_hfworkshop_wrappers_keep_output(tmp_path: Path) -> None:

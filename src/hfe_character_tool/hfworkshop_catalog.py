@@ -44,14 +44,6 @@ class SptActionInfo:
 
 
 @dataclass(frozen=True)
-class LimbNameLengthIssue:
-    source_limb: str
-    target_limb: str
-    source_length: int
-    target_length: int
-
-
-@dataclass(frozen=True)
 class CharacterTemplateCatalogEntry:
     template_id: str
     role_id: str
@@ -74,6 +66,9 @@ LUCAS_LMI_RELATIVE = Path("vendor") / "HFWorkshop" / "371 - Data.Global_lucasLmi
 LUCAS_SPT_RELATIVE = Path("vendor") / "HFWorkshop" / "442 - Data.Global_lucasSpt" / "Spt.json"
 ITEM_SPT_RELATIVE = Path("vendor") / "HFWorkshop" / "185 - Data.Global_itemSpt" / "Spt.json"
 ORIGINAL_GAME_RELATIVE = Path("vendor") / "original_game" / "HFE v1.0.2.exe"
+# Donor textures come from HF-EX: its stock roles are re-cut to Lucas's skeleton, so their
+# pictures fit the cloned SPT's baked matrices (see donor_textures).
+DONOR_ART_RELATIVE = Path("vendor") / "original_game" / "HF-EX V 0.2.5.exe"
 KEEP_SOURCE_TEXTURE_ROLE_ID = "__source__"
 KEEP_SOURCE_TEXTURE_ROLE = TextureRole(
     KEEP_SOURCE_TEXTURE_ROLE_ID, "\u4fdd\u6301\u6a21\u677f\u539f\u6837"
@@ -172,7 +167,7 @@ def texture_replacements(
 
 
 def load_texture_roles(workspace: Path) -> tuple[TextureRole, ...]:
-    role_ids = _discover_lmi_role_ids(resource_path(workspace, ORIGINAL_GAME_RELATIVE))
+    role_ids = _discover_lmi_role_ids(resource_path(workspace, DONOR_ART_RELATIVE))
     usable = [role_id for role_id in role_ids if _is_player_texture_role(role_id)]
     if "lucas" not in usable:
         usable.insert(0, "lucas")
@@ -267,45 +262,6 @@ def texture_role_selections(
         and role_id in role_ids
         and role_id not in {KEEP_SOURCE_TEXTURE_ROLE_ID, default_role_id}
     }
-
-
-def limb_name_replacements(
-    workspace: Path,
-    selections: Mapping[str, str],
-    parts: tuple[TexturePart, ...],
-    roles: tuple[TextureRole, ...],
-    source_role_id: str = "lucas",
-) -> dict[str, str]:
-    role_selections = texture_role_selections(
-        selections, parts, roles, default_role_id=source_role_id
-    )
-    if not role_selections:
-        return {}
-    catalog = _load_role_limb_names(resource_path(workspace, ORIGINAL_GAME_RELATIVE))
-    source_names = catalog.get(source_role_id, ()) or catalog.get("lucas", ())
-    replacements: dict[str, str] = {}
-    for part_id, role_id in role_selections.items():
-        donor_names = catalog.get(role_id, ())
-        for source_limb in _source_limb_names_for_part(part_id, source_names):
-            target = _best_donor_limb(source_limb, donor_names, preferred_role_id=role_id)
-            if target is not None and target != source_limb:
-                replacements[source_limb] = target
-    return replacements
-
-
-def limb_name_length_issues(
-    replacements: Mapping[str, str],
-) -> tuple[LimbNameLengthIssue, ...]:
-    return tuple(
-        LimbNameLengthIssue(
-            source_limb=source,
-            target_limb=target,
-            source_length=len(source.encode("utf-8")),
-            target_length=len(target.encode("utf-8")),
-        )
-        for source, target in sorted(replacements.items())
-        if len(source.encode("utf-8")) != len(target.encode("utf-8"))
-    )
 
 
 def load_item_options(workspace: Path) -> tuple[ItemOption, ...]:
@@ -926,144 +882,8 @@ def _discover_lmi_role_ids(exe_path: Path) -> tuple[str, ...]:
     return tuple(role_ids) or ("lucas",)
 
 
-_ROLE_LIMB_NAME_CACHE: dict[tuple[str, int, int], dict[str, tuple[str, ...]]] = {}
-
-
-def _limb_cache_key(exe_path: Path) -> tuple[str, int, int] | None:
-    try:
-        stat = exe_path.stat()
-    except OSError:
-        return None
-    return (str(exe_path.resolve()), stat.st_size, stat.st_mtime_ns)
-
-
-def role_limb_names_ready(workspace: Path) -> bool:
-    """True once the limb-name catalog is parsed, so texture checks are instant."""
-    key = _limb_cache_key(resource_path(workspace, ORIGINAL_GAME_RELATIVE))
-    return key is not None and key in _ROLE_LIMB_NAME_CACHE
-
-
-def warm_role_limb_names(workspace: Path) -> None:
-    _load_role_limb_names(resource_path(workspace, ORIGINAL_GAME_RELATIVE))
-
-
-def _load_role_limb_names(exe_path: Path) -> dict[str, tuple[str, ...]]:
-    # Parsing the projector EXE takes seconds; the result only changes with the file.
-    key = _limb_cache_key(exe_path)
-    if key is None:
-        return {}
-    cached = _ROLE_LIMB_NAME_CACHE.get(key)
-    if cached is None:
-        cached = _parse_role_limb_names(exe_path)
-        _ROLE_LIMB_NAME_CACHE[key] = cached
-    return cached
-
-
-def _parse_role_limb_names(exe_path: Path) -> dict[str, tuple[str, ...]]:
-    if not exe_path.is_file():
-        return {}
-    try:
-        swf = _extract_projector_swf_bytes(exe_path)
-        body = _decompress_swf_body(swf)
-        symbols = _symbol_class_map(body)
-        binaries = _binary_data_by_id(body)
-    except (OSError, ValueError, zlib.error):
-        return {}
-    role_names: dict[str, tuple[str, ...]] = {}
-    prefix = "Data.Global_"
-    suffix = "Lmi"
-    for class_name, symbol_id in symbols.items():
-        if not class_name.startswith(prefix) or not class_name.endswith(suffix):
-            continue
-        data = binaries.get(symbol_id)
-        if data is None:
-            continue
-        role_id = class_name[len(prefix) : -len(suffix)]
-        role_names[role_id] = _limb_names_from_binary_data(data)
-    return role_names
-
-
-def _best_donor_limb(
-    source_limb: str,
-    donor_names: tuple[str, ...],
-    preferred_role_id: str = "",
-) -> str | None:
-    source_suffix = _limb_suffix(source_limb)
-    primary_candidates = _dedupe_strings(
-        (
-            *_DONOR_SUFFIX_CANDIDATES.get(source_limb, ()),
-            *_DONOR_SUFFIX_CANDIDATES.get(source_suffix, ()),
-            source_suffix,
-        )
-    )
-    fallback_candidates = _base_suffix_candidates(source_suffix)
-    by_suffix: dict[str, list[str]] = {}
-    for name in donor_names:
-        by_suffix.setdefault(_limb_suffix(name).lower(), []).append(name)
-
-    target = _find_donor_limb_candidate(
-        source_limb, primary_candidates, by_suffix, preferred_role_id
-    )
-    if target is not None:
-        return target
-    if _should_hide_unmatched_overlay_suffix(source_suffix):
-        return ""
-    return _find_donor_limb_candidate(
-        source_limb, fallback_candidates, by_suffix, preferred_role_id
-    )
-
-
-def _find_donor_limb_candidate(
-    source_limb: str,
-    candidates: tuple[str, ...],
-    by_suffix: Mapping[str, list[str]],
-    preferred_role_id: str = "",
-) -> str | None:
-    fallback: str | None = None
-    for candidate in candidates:
-        targets = by_suffix.get(candidate.lower(), [])
-        preferred = _preferred_role_limb(targets, preferred_role_id)
-        if preferred is not None:
-            return preferred
-        if fallback is None and targets:
-            fallback = targets[0]
-        for target in targets:
-            if len(target.encode("utf-8")) == len(source_limb.encode("utf-8")):
-                return target
-    return fallback
-
-
 def _should_hide_unmatched_overlay_suffix(source_suffix: str) -> bool:
     return source_suffix.lower().endswith("_hfx")
-
-
-def _preferred_role_limb(targets: list[str], preferred_role_id: str) -> str | None:
-    if not preferred_role_id:
-        return None
-    prefix = f"{preferred_role_id}_".lower()
-    for target in targets:
-        if target.lower().startswith(prefix):
-            return target
-    return None
-
-
-def _base_suffix_candidates(source_suffix: str) -> tuple[str, ...]:
-    candidates: list[str] = []
-    if "_" in source_suffix and len(source_suffix) >= 3 and source_suffix[:2].isdigit():
-        base = source_suffix.split("_", 1)[0]
-        candidates.append(base)
-        candidates.extend(_DONOR_SUFFIX_CANDIDATES.get(base, ()))
-    current = source_suffix
-    while len(current) > 3 and (current[-1].isdigit() or current[-1].isupper()):
-        current = current[:-1]
-        if len(current) >= 3 and current[:2].isdigit():
-            candidates.append(current)
-            candidates.extend(_DONOR_SUFFIX_CANDIDATES.get(current, ()))
-    return tuple(candidates)
-
-
-def _dedupe_strings(values: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(value for value in values if value))
 
 
 def _source_limb_names_for_part(part_id: str, source_names: tuple[str, ...]) -> tuple[str, ...]:
@@ -1166,15 +986,6 @@ def _symbol_class_map(swf_body: bytes) -> dict[str, int]:
     return symbols
 
 
-def _binary_data_by_id(swf_body: bytes) -> dict[int, bytes]:
-    binaries: dict[int, bytes] = {}
-    for tag_code, payload in _swf_tags(swf_body):
-        if tag_code == 87 and len(payload) >= 6:
-            symbol_id = int.from_bytes(payload[0:2], "little")
-            binaries[symbol_id] = payload[6:]
-    return binaries
-
-
 def _swf_tags(swf_body: bytes) -> tuple[tuple[int, bytes], ...]:
     tags: list[tuple[int, bytes]] = []
     pos = 8
@@ -1221,18 +1032,6 @@ def _read_symbol_class_names(payload: bytes) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _limb_names_from_binary_data(data: bytes) -> tuple[str, ...]:
-    try:
-        inflated = zlib.decompress(_read_amf3_byte_array(data))
-    except (ValueError, zlib.error):
-        return ()
-    return tuple(
-        value
-        for value in _utf_strings(inflated)
-        if _looks_like_limb_name(value)
-    )
-
-
 def _read_amf3_byte_array(data: bytes) -> bytes:
     if len(data) < 2 or data[0] != 0x0C:
         raise ValueError("expected AMF3 ByteArray")
@@ -1262,29 +1061,6 @@ def _read_u29(data: bytes, offset: int) -> tuple[int, int]:
     current = data[offset]
     offset += 1
     return value | current, offset
-
-
-def _utf_strings(data: bytes) -> tuple[str, ...]:
-    values: list[str] = []
-    offset = 0
-    while offset <= len(data) - 3:
-        if data[offset] != 0x02:
-            offset += 1
-            continue
-        length = (data[offset + 1] << 8) | data[offset + 2]
-        start = offset + 3
-        end = start + length
-        if end > len(data):
-            offset += 1
-            continue
-        try:
-            value = data[start:end].decode("utf-8")
-        except UnicodeDecodeError:
-            offset += 1
-            continue
-        values.append(value)
-        offset = end
-    return tuple(values)
 
 
 def _looks_like_limb_name(value: str) -> bool:

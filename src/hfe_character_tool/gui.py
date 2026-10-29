@@ -16,6 +16,11 @@ from typing import Any, Callable, TypeVar, cast
 
 from hfe_character_tool import gui_theme as theme
 from hfe_character_tool.action_names import describe_action, family_label, infer_family
+from hfe_character_tool.donor_textures import (
+    donor_catalog_ready,
+    texture_parts_without_donor,
+    warm_donor_catalog,
+)
 from hfe_character_tool.export import export_project
 from hfe_character_tool.gui_presenter import (
     CharacterForm,
@@ -65,18 +70,14 @@ from hfe_character_tool.hfworkshop_catalog import (
     CharacterTemplateCatalogEntry,
     ItemCatalog,
     SptActionInfo,
-    limb_name_length_issues,
-    limb_name_replacements,
     load_character_template_catalog,
     load_item_catalog,
     load_spt_action_options,
     load_spt_frame_item_slots,
     load_texture_parts,
     load_texture_roles,
-    role_limb_names_ready,
     selected_texture_role_label,
     texture_role_ids_by_label,
-    warm_role_limb_names,
 )
 from hfe_character_tool.models import (
     AFTERIMAGE_MAX_DELAY,
@@ -346,11 +347,11 @@ class HfeCharacterApp(tk.Tk):
         self._show_welcome()
         self.deiconify()
         # Texture limb-name checks need the parsed game EXE (seconds); parse it once early.
-        threading.Thread(target=warm_role_limb_names, args=(workspace,), daemon=True).start()
+        threading.Thread(target=warm_donor_catalog, args=(workspace,), daemon=True).start()
         self.after(500, self._wait_for_limb_names)
 
     def _wait_for_limb_names(self) -> None:
-        if not role_limb_names_ready(self.workspace):
+        if not donor_catalog_ready(self.workspace):
             self.after(500, self._wait_for_limb_names)
         elif self._project is not None:
             self._refresh_derived()
@@ -882,7 +883,8 @@ class HfeCharacterApp(tk.Tk):
             body,
             0,
             "部位贴图",
-            "每个部位都可以换成游戏里其他角色同一部位的贴图；“保持模板原样”表示这个部位不改。",
+            "每个部位都可以换成其他角色同一部位的贴图（取自 HF-EX 按 Lucas 骨骼对齐的版本，"
+            "导出到哪个游戏都不会错位）；“保持模板原样”表示这个部位不改。",
         )
         toolbar = ttk.Frame(card)
         toolbar.pack(fill="x", pady=(0, theme.px(8)))
@@ -1769,51 +1771,39 @@ class HfeCharacterApp(tk.Tk):
                 else None
             )
             issues.extend(validate_against_target(project, context.cache, self.spt_actions, groups))
-        self._texture_warnings = self._texture_length_warnings(project)
+        self._texture_warnings = self._texture_donor_warnings(project)
         labels = {part.part_id: part.label for part in self.texture_parts}
         for part_id, detail in self._texture_warnings.items():
             issues.append(
                 ValidationIssue(
                     Severity.WARNING,
-                    f"{labels.get(part_id, part_id)}换了来源角色后部件名长度会变，游戏里可能错位。",
-                    "贴图是按部件名引用的，名字长度不同时位置偏移不会自动修正。"
-                    "可以先导出进游戏看看，错位明显就换一个来源角色或改回原样。",
+                    f"{labels.get(part_id, part_id)}选的来源角色没有这个部件，会保持模板原样。",
+                    "想换掉这个部位，请换一个有该部件的来源角色。",
                     f"textures.{part_id}",
                     detail,
                 )
             )
         return ValidationReport(tuple(issues))
 
-    def _texture_length_warnings(self, project: CharacterProject) -> dict[str, str]:
-        if not role_limb_names_ready(self.workspace):
+    def _texture_donor_warnings(self, project: CharacterProject) -> dict[str, str]:
+        if not donor_catalog_ready(self.workspace):
             return {}
-        unchanged = {KEEP_SOURCE_TEXTURE_ROLE_ID, self._source_role_id}
-        warnings: dict[str, str] = {}
-        for part in self.texture_parts:
-            role = project.texture_selections.get(part.part_id, KEEP_SOURCE_TEXTURE_ROLE_ID)
-            if role in unchanged:
-                continue
-            found = limb_name_length_issues(
-                limb_name_replacements(
-                    self.workspace,
-                    {part.part_id: role},
-                    self.texture_parts,
-                    self.texture_roles,
-                    self._source_role_id,
-                )
-            )
-            if found:
-                warnings[part.part_id] = "\n".join(
-                    f"{issue.source_limb} → {issue.target_limb or '（来源角色没有这个部件）'}"
-                    for issue in found[:4]
-                )
-        return warnings
+        missing = texture_parts_without_donor(
+            self.workspace,
+            project.texture_selections,
+            self.texture_parts,
+            self._source_role_id,
+        )
+        return {
+            part_id: f"来源角色：{project.texture_selections.get(part_id, '')}"
+            for part_id in missing
+        }
 
     def _texture_tip(self, part_id: str) -> str:
         detail = self._texture_warnings.get(part_id)
         if not detail:
             return ""
-        return "部件名长度会变，游戏里这个部位可能错位：\n" + detail
+        return "来源角色没有这个部件，导出后保持模板原样。\n" + detail
 
     def _refresh_target_card(self) -> None:
         self.target_name_label.configure(text=target_display_name(self._target_game))

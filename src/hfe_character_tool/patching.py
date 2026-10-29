@@ -6,13 +6,16 @@ from pathlib import Path
 from typing import Mapping
 
 from hfe_character_tool.afterimage_patch import AfterimageRole, apply_afterimage, encode_config
+from hfe_character_tool.donor_textures import apply_donor_textures
 from hfe_character_tool.hfworkshop_catalog import (
-    limb_name_replacements,
+    DONOR_ART_RELATIVE,
     load_spt_action_options_from_payload,
     load_texture_parts,
     load_texture_roles,
+    texture_role_selections,
 )
 from hfe_character_tool.models import InternalCharacter
+from hfe_character_tool.runtime import resource_path
 from hfe_character_tool.swf_binary_symbol_patch import clone_binary_symbols
 from hfe_character_tool.swf_bytearray_class_patch import add_bytearray_asset_classes
 from hfe_character_tool.swf_data_extract import extract_data_global_symbol
@@ -355,12 +358,12 @@ def generate_patched_swf(
         )
     resource_id = cid
     defense_brk0 = -abs(int(character.stats.get("defense", 0)))
-    replacements = limb_name_replacements(
-        workspace or output_dir.parent,
+    texture_parts = load_texture_parts(workspace or output_dir.parent)
+    donor_selections = texture_role_selections(
         character.texture_selections,
-        load_texture_parts(workspace or output_dir.parent),
+        texture_parts,
         load_texture_roles(workspace or output_dir.parent),
-        source_role_id,
+        default_role_id=source_role_id,
     )
     source_spt_class = f"Data.Global_{source_role_id}Spt"
     source_lmi_class = f"Data.Global_{source_role_id}Lmi"
@@ -374,6 +377,7 @@ def generate_patched_swf(
     )
     source_actions = load_spt_action_options_from_payload(source_spt_payload)
     binary_swf = output_dir / f"{stem}_01_binary.swf"
+    textures_swf = output_dir / f"{stem}_01b_textures.swf"
     abc_swf = output_dir / f"{stem}_02_abc.swf"
     registry_swf = output_dir / f"{stem}_03_registry.swf"
     loader_swf = output_dir / f"{stem}_04_loader.swf"
@@ -408,7 +412,7 @@ def generate_patched_swf(
         resource_id=resource_id,
         defense_brk0=defense_brk0,
         item_frame_edits=character.item_frame_edits,
-        texture_replacements=replacements,
+        texture_replacements={},
         workspace=workspace or output_dir.parent,
         source_character_id=source_role_id,
         spt_actions=source_actions,
@@ -419,8 +423,24 @@ def generate_patched_swf(
         binary_result.run_result,
     )
 
-    abc_result = add_bytearray_asset_classes(
+    # Body-part textures come from HF-EX, whose roles are cut to Lucas's skeleton; the
+    # SPT keeps its matrices and only the new role's own LMI slots change.
+    texture_result = apply_donor_textures(
         binary_swf,
+        textures_swf,
+        resource_path(workspace or output_dir.parent, DONOR_ART_RELATIVE),
+        donor_selections,
+        texture_parts,
+        source_spt_class,
+        source_lmi_class,
+        plan.spt_class,
+        plan.lmi_class,
+        source_role_id,
+        resource_id,
+    )
+
+    abc_result = add_bytearray_asset_classes(
+        textures_swf,
         abc_swf,
         tools,
         output_dir,
@@ -542,7 +562,11 @@ def generate_patched_swf(
         )
     )
     diagnostics.update(afterimage_diagnostics)
-    diagnostics["texture_limb_replacements_requested"] = len(replacements)
+    diagnostics["texture_donor_limbs"] = len(texture_result.swapped_limbs)
+    diagnostics["texture_hidden_limbs"] = len(texture_result.hidden_limbs)
+    diagnostics["texture_copied_pictures"] = texture_result.copied_pictures
+    if texture_result.skipped:
+        diagnostics["texture_skipped"] = "; ".join(texture_result.skipped)
     metadata_stdout = _parse_json_stdout(metadata_result.run_result.stdout)
     vsselect_stdout = _parse_json_stdout(vsselect_result.run_result.stdout)
     exp_stdout = _parse_json_stdout(exp_result.run_result.stdout)

@@ -88,10 +88,22 @@ def summarize_tool_result(tool_name: str, result: ToolResult) -> str:
     return f"{tool_name} 执行失败，返回码 {result.returncode}。"
 
 
+# The packaged GUI has no console, so every console child (java/FFDec, javac, ...) would pop
+# up its own terminal window while exporting. CREATE_NO_WINDOW gives it a hidden console
+# instead, which its own children inherit.
+_HIDDEN_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def run_tool(command: tuple[str, ...], cwd: Path) -> ToolResult:
     command = _resolve_command(command, cwd)
     try:
-        completed = subprocess.run(command, cwd=cwd, capture_output=True, check=False)
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            check=False,
+            creationflags=_HIDDEN_CONSOLE,
+        )
     except OSError as exc:
         return ToolResult(success=False, returncode=-1, stdout="", stderr=str(exc))
     return ToolResult(

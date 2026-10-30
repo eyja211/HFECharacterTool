@@ -9,6 +9,7 @@ from hfe_character_tool.afterimage_patch import AfterimageRole, apply_afterimage
 from hfe_character_tool.donor_textures import apply_donor_textures
 from hfe_character_tool.hfworkshop_catalog import (
     DONOR_ART_RELATIVE,
+    ORIGINAL_GAME_RELATIVE,
     load_spt_action_options_from_payload,
     load_texture_parts,
     load_texture_roles,
@@ -423,20 +424,19 @@ def generate_patched_swf(
         binary_result.run_result,
     )
 
-    # Body-part textures come from HF-EX, whose roles are cut to Lucas's skeleton; the
-    # SPT keeps its matrices and only the new role's own LMI slots change.
+    # Body-part textures come from HF-EX, whose roles are cut to Lucas's skeleton; changed
+    # slots point at limbs private to the new role, re-registered against the HFE reference.
     texture_result = apply_donor_textures(
         binary_swf,
         textures_swf,
         resource_path(workspace or output_dir.parent, DONOR_ART_RELATIVE),
         donor_selections,
-        texture_parts,
         source_spt_class,
-        source_lmi_class,
         plan.spt_class,
         plan.lmi_class,
         source_role_id,
         resource_id,
+        resource_path(workspace or output_dir.parent, ORIGINAL_GAME_RELATIVE),
     )
 
     abc_result = add_bytearray_asset_classes(
@@ -562,9 +562,12 @@ def generate_patched_swf(
         )
     )
     diagnostics.update(afterimage_diagnostics)
-    diagnostics["texture_donor_limbs"] = len(texture_result.swapped_limbs)
-    diagnostics["texture_hidden_limbs"] = len(texture_result.hidden_limbs)
+    diagnostics["texture_swapped_slots"] = len(texture_result.swapped_slots)
+    diagnostics["texture_hidden_slots"] = len(texture_result.hidden_slots)
     diagnostics["texture_copied_pictures"] = texture_result.copied_pictures
+    diagnostics["texture_moved_matrices"] = texture_result.moved_matrices
+    diagnostics["texture_aligned_pictures"] = texture_result.aligned_pictures
+    diagnostics["texture_padded_pictures"] = texture_result.padded_pictures
     if texture_result.skipped:
         diagnostics["texture_skipped"] = "; ".join(texture_result.skipped)
     metadata_stdout = _parse_json_stdout(metadata_result.run_result.stdout)
